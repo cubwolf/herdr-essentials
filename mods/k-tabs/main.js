@@ -1,7 +1,8 @@
 // k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, focused } from "herdr";
+import { attach } from "./attach.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -150,6 +151,12 @@ export default class Tabs extends View {
         .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
         .children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      // k-tabs: + Attach files (system dialog → paths pasted into the focused terminal, no Enter).
+      .when(Boolean(focused()?.terminal), el => el.child(h_flex().id("attach").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+        .text_size(12).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+        .tooltip("Attach files: paste their paths into the terminal")
+        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => attach(cx)); })
+        .child(svg("mods/k-tabs/paperclip.svg").size(14)).child("Attach")))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/k-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))

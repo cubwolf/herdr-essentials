@@ -6,7 +6,7 @@
 |---|---|---|
 | `k-tabs` | 內建 `tabs` 的 clone:tab 的 × 改成收起(`tab.settle`),程式繼續跑;tab 列不列已收起的 | Linux 測試環境驗過 |
 | `k-spaces` | 內建 `spaces` 的 clone:Space 列右邊的箭頭(旁邊數字=收起幾個)展開所有 tab,點一下叫回、🗑 才真的關(`tab.close`) | Linux 測試環境驗過 |
-| `k-attach` | 「＋ 附加檔案」按鈕:選檔後把路徑貼進 terminal(不按 Enter) | 規劃中 |
+| `k-tabs` 的 Attach | tab 列右上「📎 Attach」:系統選檔視窗(Linux zenity/kdialog、Windows PowerShell、macOS osascript)→ 路徑加引號貼進目前的 terminal,不按 Enter;遠端機器先 `hc put` 過去。借用剪貼簿後會還原原本的文字 | Linux 測試環境驗過(Claude Code 收到 `[Image #1]`) |
 
 貼上圖片 / 剪貼簿裡的檔案:Herdr 原生已支援(`terminal.paste` / `terminal.paste_image`),先實測再決定要不要補。
 
