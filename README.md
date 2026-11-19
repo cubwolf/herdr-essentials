@@ -4,15 +4,23 @@
 
 | mod | 做什麼 | 狀態 |
 |---|---|---|
-| `k-tabs` | 內建 `tabs` 的 clone:tab 的 × 改成收起(`tab.settle`),程式繼續跑 | 規劃中 |
-| `k-spaces` | 內建 `spaces` 的 clone:Space 底下展開列出所有 tab(含收起的),點一下叫回、🗑 才真的關 | 規劃中 |
+| `k-tabs` | 內建 `tabs` 的 clone:tab 的 × 改成收起(`tab.settle`),程式繼續跑;tab 列不列已收起的 | Linux 測試環境驗過 |
+| `k-spaces` | 內建 `spaces` 的 clone:Space 列右邊的箭頭(旁邊數字=收起幾個)展開所有 tab,點一下叫回、🗑 才真的關(`tab.close`) | Linux 測試環境驗過 |
 | `k-attach` | 「＋ 附加檔案」按鈕:選檔後把路徑貼進 terminal(不按 Enter) | 規劃中 |
 
 貼上圖片 / 剪貼簿裡的檔案:Herdr 原生已支援(`terminal.paste` / `terminal.paste_image`),先實測再決定要不要補。
 
 ## 安裝
 
-把 `mods/<name>/` 複製到 `~/.config/herdr-app/mods/`(或 `$HERDR_APP_HOME/mods/`),再跑 `herdr-app check ~/.config/herdr-app/mods/<name>`。
-clone 出來的 mod 要配一份自己的 layout(`layout.clone main`)把對應的 block 指過去。
+```sh
+./install.sh                                  # 複製 mods/ 進 App home,並用你的 main.json 做一份 k-main(換成 k-tabs / k-spaces)
+herdr-app do layout.switch --name k-main      # 換過去;回原樣:--name main(或 ctrl-alt-shift-escape)
+```
+
+內建 mod / layout 每次啟動會被 Herdr 覆蓋,所以一律用 `k-` 前綴的複本。以 herdr-app 0.1.16 的內建版為底。
+
+## 開發
+
+`dev/sandbox/`:Linux 上的隔離測試環境(獨立 core + App home + Xvfb),不碰正在用的 App,見其 README。
 
 追蹤:Tide #286。
