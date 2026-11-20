@@ -1,5 +1,5 @@
 // k-chrome (herdr-essentials): the shipped workspace-chrome; the footer's Settings opens k-settings
-// (the app's settings plus Profiles and Mods pages).
+// (the app's settings plus Profiles and Mods pages), and the title bar has a k-pick button.
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";
@@ -50,6 +50,8 @@ export default class WorkspaceChrome extends View {
     return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))
       .when(!collapsed, el => el.child(h_flex().flex_1().gap(8).items_center().child(image("frame/welcome/herdr.png").size(20).rounded(5)).child(div().font_semibold().text_color(t.foreground).child("Herdr"))))
+      // k-chrome: k-pick, to point at a part of the window for an agent (copies a locator and a shot).
+      .when(!collapsed, el => el.child(this.button("pick", svg("mods/k-chrome/pick.svg").size(15), () => run("mod.open", { name: "k-pick" })).tooltip("Pick a part of the window for an agent")))
       .when(!collapsed, el => el.child(this.button("search", svg("mods/workspace-chrome/search.svg").size(15), () => run("mod.open", { name: "picker" }))))
       // On the macOS rail the traffic lights fill the row; the agents list's » unfolds it.
       .when(!(collapsed && window()?.platform === "macos"), el => el.child(this.button("sidebar-toggle", svg("mods/workspace-chrome/sidebar.svg").size(15), toggleSidebar)));

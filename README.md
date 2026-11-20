@@ -12,7 +12,7 @@
 | `k-settings` | 內建 Settings 的 clone(內建的 `frame/settings` 每次啟動會被覆蓋),左邊多 Profiles、Mods 兩頁;左下角 `k-chrome` 的 Settings 列開的是它(命令面板開的仍是內建版)。`herdr-app do mod.open --name k-settings` 也行 | Windows 驗過 |
 | `k-settings` 的 Profiles(原 `k-profiles`) | 多開視窗:Settings → Profiles 是 profile 管理頁。每個 profile 是一個獨立的 App home(`~/.config/herdr-app-<名字>`,和預設 home 放在同一層),有自己的版面、設定和顯示中的 Space;terminal 是同一批,因為共用同一個 core。新增時複製目前視窗的版面、mod 和設定,並建一個固定入口:Windows 開始選單「Herdr (名字)」(`.lnk` → 同資料夾的 `open-herdr.vbs`,開啟時不會閃黑窗),Linux 應用程式選單(`.desktop`);macOS 只能從管理頁開。移除只刪清單和入口,資料夾保留。加入的名字對應的資料夾已存在(被移除過的、或自己手動建的)就收編:缺的才補(版面、mod、主題逐個補),已有的檔不覆蓋;手動建的資料夾若原本是 `main` 版面,收編後要自己 `layout.switch --name k-main` 一次。清單存在 `herdr-profiles.json`(和預設 home 同一層) | Linux 測試環境驗過 |
 | `k-settings` 的 Mods(原 `k-mods`) | Mod 管理頁,長得像 VS Code 的擴充功能頁:Settings → Mods。左邊搜尋框 + Installed / Marketplace 兩個分頁,右邊是選到的 mod 的詳細資料和按鈕。Installed:自己的 mod 在上(來源 `owner/repo @sha7`、`local` 或 `link`,有新版會標 update available),Herdr 內建的收在「Built-in」群組、不能刪也不能停用;k-settings 自己也不能。Marketplace:GitHub topic `herdr-mod` 的 repo(有 `gh` 就用登入身分查,沒有就匿名),搜尋、Load more 分頁。安裝 / 更新前先在右邊顯示審查:會複製什麼、程式碼會不會執行程式 / 連網 / 讀寫檔案、加哪些快捷鍵,同名就擋下;按 Confirm 才裝。Disable 把 mod 搬到 `mods-disabled/`,Enable 搬回來;被 layout 用到的(例如 k-main 的 k-tabs)會拒絕並說是哪個 layout。Windows 走 PowerShell(未在 Windows 實測)。改自 [jacksonpires/herdr-app-mod-manager](https://github.com/jacksonpires/herdr-app-mod-manager)(MIT,見 `THIRD-PARTY-NOTICES.md`) | Linux 測試環境驗過 |
-| `k-pick` | 給 agent 指位置用(像 web 的 DevPick):`herdr-app do mod.open --name k-pick` 開一層透明覆蓋,滑鼠框出游標下的版面區塊,點一下複製定位器(layout / block / mod / 檔案 / 座標)加一張標了紅點的視窗截圖(`.k-pick/` 在 App home),貼給 agent 就知道是哪裡。只認版面區塊,對話框裡的東西還選不到;還沒綁快捷鍵 | Windows 驗過 |
+| `k-pick` | 給 agent 指位置用(像 web 的 DevPick):左上角 Herdr 標題列的準心圖示(`k-chrome`,在搜尋左邊;或 `herdr-app do mod.open --name k-pick`)開一層透明覆蓋,滑鼠框出游標下的版面區塊,點一下複製定位器(layout / block / mod / 檔案 / 座標)加一張標了紅點的視窗截圖(`.k-pick/` 在 App home),貼給 agent 就知道是哪裡。只認版面區塊,對話框裡的東西還選不到;沒綁快捷鍵(要的話自己在 `keys.json` 加 `"ctrl-f12": "mod.open:k-pick"`,但改過 `keys.json` 後 Herdr 升級的新預設快捷鍵就不會自動加入) | Windows 驗過 |
 
 搜過沒有現成可用的:`Hypercubed/herdr-app-focus-window` 能從 Space 選單開新視窗,但每次都是新的 home,而且沒有授權條款;`GiorgiTarsaidze/herdr-profiles` 是給終端機版 herdr 的。
 
@@ -27,7 +27,8 @@ cd herdr-essentials
 herdr-app do layout.switch --name k-main      # 換過去;回原樣:--name main(或 ctrl-alt-shift-escape)
 ```
 
-- **symlink 模式(預設)**:改 repo 裡的 `mods/` 即熱重載,直接 `git commit` / `push`;其他機器 `git pull` 就同步,不必重跑。
+- **symlink 模式(預設)**:App home 直接用 repo 裡的 `mods/`,改完直接 `git commit` / `push`;其他機器 `git pull` 就同步,不必重跑。Linux 上存檔即熱重載;**Windows 上透過 symlink 改檔不會觸發熱重載**,要切一次版面才會重新載入:`herdr-app do layout.switch --name main` 再 `--name k-main`(切到同一個版面沒用)。新開的 overlay / 對話框(例如 k-settings、k-pick)每次打開都讀新檔,不受影響。
+- 手動在 App home 建連結時用 `./install.sh`,別直接 `ln -s`:Git Bash 預設的 `ln -s` 會默默變成複製,App 就一直跑舊版。
 - **複製模式**:`./install.sh --copy`;之後有改動要重跑才會更新。Windows 沒開 symlink 權限(開發人員模式)時,`./install.sh` 會自己偵測到並改用複製模式,印一行提示。
 - `k-main.json` 是從本機的 `main.json` 產生的,放在 App home,不在 repo;已存在就不重做,只補新版的換法(目前是 `workspace-chrome` → `k-chrome`、`agents` → `k-agents`,Profiles / Mods 收在 Settings 裡,底部維持 69px;舊版加高過的 97px / 125px 會縮回);要整份重做先刪掉。
 - App 會在每個 mod 目錄自動寫入 `gpui-kit.d.ts`、`jsconfig.json`,已在 `.gitignore`。
