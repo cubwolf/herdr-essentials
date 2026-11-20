@@ -67,7 +67,8 @@ async function shortcut(name, homeDir) {
     const r = await exec("powershell.exe", ["-NoProfile", "-Command",
       `$ErrorActionPreference='Stop'; $h=${ps(homeDir)}; $exe=(Get-Command herdr-app -ErrorAction SilentlyContinue).Source; if (-not $exe) { throw 'herdr-app is not on PATH' }; ` +
       `$vbs=Join-Path $h 'open-herdr.vbs'; ` +
-      `$q=[char]34; Set-Content -LiteralPath $vbs -Encoding Unicode -Value @('Set s = CreateObject(' + $q + 'WScript.Shell' + $q + ')', 's.Environment(' + $q + 'Process' + $q + ')(' + $q + 'HERDR_APP_HOME' + $q + ') = ' + $q + $h + $q, 's.Run ' + $q + $q + $q + $exe + $q + $q + $q + ', 1, False'); ` +
+      // Each line in its own parentheses: in PowerShell "," binds tighter than "+", so unwrapped they join into one line.
+      `$q=[char]34; Set-Content -LiteralPath $vbs -Encoding Unicode -Value @(('Set s = CreateObject(' + $q + 'WScript.Shell' + $q + ')'), ('s.Environment(' + $q + 'Process' + $q + ')(' + $q + 'HERDR_APP_HOME' + $q + ') = ' + $q + $h + $q), ('s.Run ' + $q + $q + $q + $exe + $q + $q + $q + ', 1, False')); ` +
       `$lnk=Join-Path ([Environment]::GetFolderPath('Programs')) ${ps(`Herdr (${name}).lnk`)}; $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut($lnk); ` +
       `$s.TargetPath=Join-Path $env:WINDIR 'System32\\wscript.exe'; $s.Arguments=$q + $vbs + $q; $s.IconLocation="$exe,0"; $s.Description=${ps(`Herdr window: ${name}`)}; $s.Save(); $lnk`]);
     return r.code === 0 ? true : fail("Couldn't make the shortcut", r);
