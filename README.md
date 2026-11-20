@@ -26,7 +26,7 @@ herdr-app do layout.switch --name k-main      # 換過去;回原樣:--name main(
 ```
 
 - **symlink 模式(預設)**:改 repo 裡的 `mods/` 即熱重載,直接 `git commit` / `push`;其他機器 `git pull` 就同步,不必重跑。
-- **複製模式**:`./install.sh --copy`。Windows 沒開 symlink 權限時用;之後有改動要重跑才會更新。
+- **複製模式**:`./install.sh --copy`;之後有改動要重跑才會更新。Windows 沒開 symlink 權限(開發人員模式)時,`./install.sh` 會自己偵測到並改用複製模式,印一行提示。
 - `k-main.json` 是從本機的 `main.json` 產生的,放在 App home,不在 repo;已存在就不重做,只補新版的換法(目前是 `workspace-chrome` → `k-chrome`、`agents` → `k-agents`,底部加高到 125px 放 Settings / Add machine / Profiles / Mods 四列;舊版的 97px 會補加高);要整份重做先刪掉。
 - App 會在每個 mod 目錄自動寫入 `gpui-kit.d.ts`、`jsconfig.json`,已在 `.gitignore`。
 

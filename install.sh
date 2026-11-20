@@ -9,6 +9,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 H=${HERDR_APP_HOME:-$HOME/.config/herdr-app}
 [ -d "$H/layouts" ] || { echo "找不到 $H/layouts:先開過一次 Herdr App" >&2; exit 1; }
 MODE=link; [ "${1:-}" = "--copy" ] && MODE=copy
+# Windows(Git Bash)沒有 symlink 權限時,ln -s 會默默改成複製,之後 git pull 不會生效。
+# 改成要嘛建真的 symlink、要嘛失敗,再先試一次:不行就自動改用複製模式。
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) export MSYS="${MSYS:+$MSYS }winsymlinks:nativestrict" CYGWIN="${CYGWIN:+$CYGWIN }winsymlinks:nativestrict";; esac
+if [ "$MODE" = link ]; then
+  t=$(mktemp -d); if ! { ln -s "$HERE/mods" "$t/probe" 2>/dev/null && [ -L "$t/probe" ]; }; then
+    MODE=copy; echo "這台不能建 symlink(Windows 要開「開發人員模式」),改用複製模式:之後 repo 有改動要重跑 ./install.sh" >&2
+  fi; rm -rf "$t"
+fi
 for m in "$HERE"/mods/*/; do
   name=$(basename "$m"); src=${m%/}; dst=$H/mods/$name
   if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi    # 不管之前是 copy 還是 link,都重做
