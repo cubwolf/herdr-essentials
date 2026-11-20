@@ -68,6 +68,9 @@ export function tone(t, status) {
 export default class Spaces extends View {
   init(_props, cx) {
     try { this.tabsOpen = new Set(JSON.parse(localStorage.getItem("k.tabs.open") ?? "[]")); } catch { this.tabsOpen = new Set(); }
+    // k-spaces: Del ends the tab last pressed in the fold-out list, while the list has the keyboard.
+    this.handle = cx.focus_handle();
+    this.cursor = null;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -530,9 +533,13 @@ export default class Spaces extends View {
       const lead = ps.find(p => p.tab === c.id && p.program?.agent) ?? ps.find(p => p.tab === c.id);
       const name = c.named ? c.name : (lead?.program?.name ?? c.name);
       const shown = w.active && c.active;
+      const marked = this.cursor === c.id;
       return h_flex().id(`tab-${c.id}`).h(24).flex_none().pl(35).pr(4).gap(6).items_center().rounded(6).text_size(12)
         .when(shown, el => el.bg(t.selected))
         .when(!shown, el => el.hover(s => s.bg(t.hover)))
+        .border(1).border_color(marked ? t.border : t.chrome)
+        // First press brings a tab back and leaves the keyboard with it; pressing the shown row again marks it for Del.
+        .on_mouse_down("left", () => { if (shown) { this.cursor = c.id; this.handle.focus(); } else this.cursor = null; })
         .text_color(c.settled ? t.dim : shown ? t.foreground : t.muted)
         .on_click(() => {
           if (c.settled) run("tab.unsettle", { id: c.id });
@@ -545,7 +552,7 @@ export default class Spaces extends View {
         .when(c.settled, el => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("put away")))
         .child(div().id(`tab-close-${c.id}`).flex_none().size(18).rounded(4).flex().items_center().justify_center()
           .text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.blocked))
-          .tooltip("Close tab: ends its programs")
+          .tooltip("Close tab: ends its programs (or click the shown row, then Del)")
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); })
           .child(svg("mods/k-spaces/trash.svg").size(12)));
@@ -594,7 +601,14 @@ export default class Spaces extends View {
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13).track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape" && this.cursor) { this.cursor = null; cx.notify(); return; }
+        if (e.key !== "delete" || !this.cursor) return;
+        const id = this.cursor; this.cursor = null;
+        if (sp.some(w => (w.tabs ?? []).some(c => c.id === id))) run("tab.close", { id });
+        cx.stop_propagation(); cx.notify();
+      })
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
