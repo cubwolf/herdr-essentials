@@ -35,18 +35,25 @@ async function save(state, list) {
 
 const fail = (title, r) => { notify({ title, body: ((r?.stderr || r?.stdout || String(r)) + "").trim().slice(0, 300) || "failed", level: "error" }); return false; };
 
-// Make the home (copied from this window's; a folder left by a removed profile is used as it is), then its shortcut.
+// Make the home (copied from this window's), then its shortcut. A folder that's already there (left
+// by a removed profile, or made by hand) is filled in: whatever it lacks is copied, one level into
+// layouts / mods / themes, and nothing it has is overwritten.
 async function create(name, homeDir) {
   const from = appHome();
   if (window()?.platform === "windows") {
     const r = await exec("powershell.exe", ["-NoProfile", "-Command",
-      `$ErrorActionPreference='Stop'; $from=${ps(from)}; $to=${ps(homeDir)}; if (-not (Test-Path -LiteralPath $to)) { ` +
-      `New-Item -ItemType Directory -Force -Path $to | Out-Null; foreach ($n in @(${CARRY.map(ps).join(",")})) { $p = Join-Path $from $n; ` +
-      `if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $to -Recurse -Force } } }`]);
+      `$ErrorActionPreference='Stop'; $from=${ps(from)}; $to=${ps(homeDir)}; New-Item -ItemType Directory -Force -Path $to | Out-Null; ` +
+      `foreach ($n in @(${CARRY.map(ps).join(",")})) { $p = Join-Path $from $n; if (-not (Test-Path -LiteralPath $p)) { continue }; $d = Join-Path $to $n; ` +
+      `if (-not (Test-Path -LiteralPath $d)) { Copy-Item -LiteralPath $p -Destination $to -Recurse -Force } ` +
+      `elseif ((Get-Item -LiteralPath $p).PSIsContainer) { foreach ($c in Get-ChildItem -LiteralPath $p -Force) { ` +
+      `if (-not (Test-Path -LiteralPath (Join-Path $d $c.Name))) { Copy-Item -LiteralPath $c.FullName -Destination $d -Recurse -Force } } } }`]);
     if (r.code !== 0) return fail("Couldn't make the profile", r);
   } else {
-    const r = await exec("sh", ["-c", `[ -e "$2" ] && exit 0; mkdir -p "$2" || exit 1
-for n in ${CARRY.join(" ")}; do [ -e "$1/$n" ] && cp -R "$1/$n" "$2/"; done; exit 0`, "sh", from, homeDir]);
+    const r = await exec("sh", ["-c", `mkdir -p "$2" || exit 1
+for n in ${CARRY.join(" ")}; do s="$1/$n"; d="$2/$n"; [ -e "$s" ] || continue
+  if [ ! -e "$d" ]; then cp -R "$s" "$2/" || exit 1
+  elif [ -d "$s" ]; then for c in "$s"/* "$s"/.[!.]*; do [ -e "$c" ] || [ -L "$c" ] || continue; [ -e "$d/\${c##*/}" ] || [ -L "$d/\${c##*/}" ] || cp -R "$c" "$d/" || exit 1; done; fi
+done; exit 0`, "sh", from, homeDir]);
     if (r.code !== 0) return fail("Couldn't make the profile", r);
   }
   return shortcut(name, homeDir);
