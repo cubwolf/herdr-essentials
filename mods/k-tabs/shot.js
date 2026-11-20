@@ -20,21 +20,26 @@ function watchArgs(platform, had) {
   const h = had ? 1 : 0;
   if (platform === "windows") return ["powershell.exe", PS(
     `$h = ${had ? "$true" : "$false"}; for ($n = 0; $n -lt 540; $n++) { ` +
-    `$c = [Windows.Forms.Clipboard]::ContainsImage(); if ($c -ne $h) { if ($c) { '1' } else { '0' }; exit }; Start-Sleep -Seconds 1 }; '${h}'`)];
+    // Locked screen: the clipboard can't be opened and this throws; keep waiting instead of answering.
+    `try { $c = [Windows.Forms.Clipboard]::ContainsImage() } catch { Start-Sleep -Seconds 1; continue }; ` +
+    `if ($c -ne $h) { if ($c) { '1' } else { '0' }; exit }; Start-Sleep -Seconds 1 }; '${h}'`)];
   return ["sh", ["-c", `${SH_HAS}
 for i in $(seq 540); do if has; then c=1; else c=0; fi; [ $c != ${h} ] && { echo $c; exit 0; }; sleep 1; done; echo ${h}`]];
 }
 
 // Calls `onChange(hasImage)` whenever that changes, for as long as `alive()` is true.
-export async function watchClipboard(alive, onChange) {
+// `wait(ms)` pauses; a watcher that comes back unchanged too soon (something failing) backs off.
+export async function watchClipboard(alive, onChange, wait) {
   const platform = window()?.platform ?? "linux";
   let had = false;
   while (alive()) {
     let r;
+    const started = Date.now();
     try { const [cmd, args] = watchArgs(platform, had); r = await exec(cmd, args, { timeout: 600000 }); } catch { return; }
     if (r.code !== 0) return; // no clipboard tool here: the button just never shows
     const now = r.stdout.trim().endsWith("1");
     if (now !== had) { had = now; onChange(now); }
+    else if (Date.now() - started < 5000) await wait(30000);
   }
 }
 
