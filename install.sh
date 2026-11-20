@@ -15,12 +15,18 @@ for m in "$HERE"/mods/*/; do
   if [ "$MODE" = link ]; then ln -s "$src" "$dst"; echo "mod: $name -> $src"
   else mkdir -p "$dst"; cp -r "$src/." "$dst/"; echo "mod: $name (copy)"; fi
 done
-if [ -e "$H/layouts/k-main.json" ]; then
-  echo "layout: k-main.json 已存在,不覆蓋(要重做請先自己刪掉)"
+K=$H/layouts/k-main.json
+if [ -e "$K" ]; then
+  echo "layout: k-main.json 已存在,不重做;只補上新版的換法"
 else
-  sed -E 's/"mod": *"tabs"/"mod": "k-tabs"/; s/"mod": *"spaces"/"mod": "k-spaces"/' "$H/layouts/main.json" > "$H/layouts/k-main.json"
-  grep -q '"k-tabs"' "$H/layouts/k-main.json" && grep -q '"k-spaces"' "$H/layouts/k-main.json" \
+  sed -E 's/"mod": *"tabs"/"mod": "k-tabs"/; s/"mod": *"spaces"/"mod": "k-spaces"/' "$H/layouts/main.json" > "$K"
+  grep -q '"k-tabs"' "$K" && grep -q '"k-spaces"' "$K" \
     || { echo "layout: main.json 裡找不到 tabs / spaces block,k-main.json 可能沒換到,請手動檢查" >&2; exit 1; }
   echo "layout: k-main.json"
+fi
+# k-chrome(左下多一列 Profiles):換掉 workspace-chrome,底部從 69px 加高到 97px 放得下三列。重跑不會重複換。
+if ! grep -q '"k-chrome"' "$K"; then
+  sed -i.bak -E 's/"mod": *"workspace-chrome"/"mod": "k-chrome"/g; s/"px": *69([^0-9]|$)/"px": 97\1/' "$K" && rm -f "$K.bak"
+  grep -q '"k-chrome"' "$K" && echo "layout: k-main 換成 k-chrome(Profiles)" || echo "layout: 找不到 workspace-chrome,Profiles 入口沒加上(用 herdr-app do mod.open --name k-profiles 開)" >&2
 fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
