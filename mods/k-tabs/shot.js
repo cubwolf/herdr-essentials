@@ -1,7 +1,7 @@
 // k-tabs paste shot (herdr-essentials): when the clipboard holds an image, a button saves it
 // as a PNG and pastes that file's path into the focused terminal, the way Attach does (Claude
 // Code turns it into an image). Herdr's own Ctrl+V on Windows only pastes text.
-import { exec, notify, window } from "herdr";
+import { exec, notify, window, shared, setShared } from "herdr";
 import { pasteFiles } from "./attach.js";
 
 const PS = (body) => ["-NoProfile", "-STA", "-Command",
@@ -15,28 +15,33 @@ const SH_HAS = `has() {
 }`;
 
 // Waits until the clipboard's "has an image" differs from `had`, then prints 1 or 0. One small
-// process at a time instead of a new one every tick; gives up (prints the old state) after ~9 min.
+// process at a time instead of a new one every tick; after 5 minutes by the clock (a locked screen
+// makes each round slower) it prints the old state, well inside exec's 10-minute limit.
 function watchArgs(platform, had) {
   const h = had ? 1 : 0;
   if (platform === "windows") return ["powershell.exe", PS(
-    `$h = ${had ? "$true" : "$false"}; for ($n = 0; $n -lt 540; $n++) { ` +
+    `$h = ${had ? "$true" : "$false"}; $t = [Diagnostics.Stopwatch]::StartNew(); while ($t.Elapsed.TotalSeconds -lt 300) { ` +
     // Locked screen: the clipboard can't be opened and this throws; keep waiting instead of answering.
     `try { $c = [Windows.Forms.Clipboard]::ContainsImage() } catch { Start-Sleep -Seconds 1; continue }; ` +
     `if ($c -ne $h) { if ($c) { '1' } else { '0' }; exit }; Start-Sleep -Seconds 1 }; '${h}'`)];
   return ["sh", ["-c", `${SH_HAS}
-for i in $(seq 540); do if has; then c=1; else c=0; fi; [ $c != ${h} ] && { echo $c; exit 0; }; sleep 1; done; echo ${h}`]];
+end=$(( $(date +%s) + 300 )); while [ $(date +%s) -lt $end ]; do if has; then c=1; else c=0; fi; [ $c != ${h} ] && { echo $c; exit 0; }; sleep 1; done; echo ${h}`]];
 }
 
-// Calls `onChange(hasImage)` whenever that changes, for as long as `alive()` is true.
-// `wait(ms)` pauses; a watcher that comes back unchanged too soon (something failing) backs off.
-export async function watchClipboard(alive, onChange, wait) {
+// Calls `onChange(hasImage)` whenever that changes. Only the newest watcher in this app home keeps
+// going: a reloaded mod starts a new one, and the old one stops when its process comes back.
+// `wait(ms)` pauses; a watcher that fails or comes back unchanged too soon backs off, never gives up.
+export async function watchClipboard(onChange, wait) {
   const platform = window()?.platform ?? "linux";
+  const me = `${Date.now()}-${Math.random()}`;
+  setShared("k.clip.watcher", me);
   let had = false;
-  while (alive()) {
+  while (shared("k.clip.watcher") === me) {
     let r;
     const started = Date.now();
-    try { const [cmd, args] = watchArgs(platform, had); r = await exec(cmd, args, { timeout: 600000 }); } catch { return; }
-    if (r.code !== 0) return; // no clipboard tool here: the button just never shows
+    try { const [cmd, args] = watchArgs(platform, had); r = await exec(cmd, args, { timeout: 600000 }); } catch { await wait(60000); continue; }
+    if (shared("k.clip.watcher") !== me) return;
+    if (r.code !== 0) { await wait(60000); continue; }
     const now = r.stdout.trim().endsWith("1");
     if (now !== had) { had = now; onChange(now); }
     else if (Date.now() - started < 5000) await wait(30000);
@@ -45,7 +50,8 @@ export async function watchClipboard(alive, onChange, wait) {
 
 // Clipboard image -> a new PNG in the temp folder; its path, or null.
 async function save(platform) {
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  const d = new Date(), two = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
   if (platform === "windows") {
     const r = await exec("powershell.exe", PS(
       "$i = [Windows.Forms.Clipboard]::GetImage(); if (-not $i) { exit 1 }; " +

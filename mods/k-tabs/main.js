@@ -35,7 +35,7 @@ export default class Tabs extends View {
     this.pressed = null;
     // k-tabs: "Paste shot" shows only while the clipboard holds an image.
     this.clipImage = false;
-    cx.spawn(async (cx) => watchClipboard(() => true, (on) => { this.clipImage = on; cx.notify(); },
+    cx.spawn(async (cx) => watchClipboard((on) => { this.clipImage = on; cx.notify(); },
       (ms) => new Promise(done => cx.timer.after(ms, () => done()))));
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }

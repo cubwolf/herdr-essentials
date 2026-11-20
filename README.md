@@ -7,7 +7,7 @@
 | `k-tabs` | 內建 `tabs` 的 clone:tab 的 × 改成收起(`tab.settle`),程式繼續跑;tab 列不列已收起的 | Linux 測試環境驗過 |
 | `k-spaces` | 內建 `spaces` 的 clone:Space 列右邊的箭頭(旁邊數字=收起幾個)展開所有 tab,點一下叫回;🗑,或再點一次正在顯示的那列(框起來)後按 Del,才真的關(`tab.close`) | Linux 測試環境驗過 |
 | `k-tabs` 的 Attach | tab 列右上「📎 Attach」:系統選檔視窗(Linux zenity/kdialog、Windows PowerShell、macOS osascript)→ 路徑加引號貼進目前的 terminal,不按 Enter;遠端機器先 `hc put` 過去。借用剪貼簿後會還原原本的文字 | Linux 測試環境驗過(Claude Code 收到 `[Image #1]`) |
-| `k-tabs` 的 Paste shot | 剪貼簿裡有圖片時,tab 列多一顆「🖼 Paste shot」:把圖存成暫存 PNG,再像 Attach 一樣把路徑貼進 terminal(Claude Code 會變成圖片),之後把圖放回剪貼簿。補 Herdr 在 Windows 上 Ctrl+V 只貼文字的缺口。偵測靠 Windows PowerShell / Linux `xclip`(Wayland `wl-paste`)/ macOS `osascript`,沒有這些工具就不會出現 | Linux 測試環境驗過 |
+| `k-tabs` 的 Paste shot | 剪貼簿裡有圖片時,tab 列多一顆「🖼 Paste shot」:把圖存成暫存 PNG,再像 Attach 一樣把路徑貼進 terminal(Claude Code 會變成圖片),之後把圖放回剪貼簿。補 Herdr 在 Windows 上 Ctrl+V 只貼文字的缺口。偵測靠 Windows PowerShell / Linux `xclip`(Wayland `wl-paste`)/ macOS `osascript`,沒有這些工具就不會出現。按下後約 2–4 秒剪貼簿暫時是路徑文字,圖放回去時會蓋掉這段時間複製的東西 | Linux 測試環境 + Windows laptop 驗過 |
 | `k-chrome` + `k-profiles` | 多開視窗:左下角多一列「Profiles」,打開是 profile 管理頁。每個 profile 是一個獨立的 App home(`~/.config/herdr-app-<名字>`,和預設 home 放在同一層),有自己的版面、設定和顯示中的 Space;terminal 是同一批,因為共用同一個 core。新增時複製目前視窗的版面、mod 和設定,並建一個固定入口:Windows 開始選單「Herdr (名字)」(`.lnk` → 同資料夾的 `open-herdr.vbs`,開啟時不會閃黑窗),Linux 應用程式選單(`.desktop`);macOS 只能從管理頁開。移除只刪清單和入口,資料夾保留,再加回同名就沿用。清單存在 `herdr-profiles.json`(和預設 home 同一層) | Linux 測試環境驗過 |
 
 搜過沒有現成可用的:`Hypercubed/herdr-app-focus-window` 能從 Space 選單開新視窗,但每次都是新的 home,而且沒有授權條款;`GiorgiTarsaidze/herdr-profiles` 是給終端機版 herdr 的。
