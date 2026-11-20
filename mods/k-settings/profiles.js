@@ -1,4 +1,4 @@
-// k-profiles (herdr-essentials): more Herdr windows, each with its own app home (its own
+// k-settings Profiles page (herdr-essentials, was k-profiles): more Herdr windows, each with its own app home (its own
 // layout, settings and which space it shows; the terminals are the same ones), and a fixed shortcut for each: Start menu on Windows, app menu on Linux.
 // A profile is a folder beside the default home (~/.config/herdr-app-<name>); the list lives beside
 // them in herdr-profiles.json so every window sees the same profiles.
@@ -101,6 +101,7 @@ async function open(homeDir) {
 
 export default class Profiles extends View {
   init(_props, cx) {
+    this.embedded = Boolean(_props?.embedded); // a page of k-settings, not its own dialog
     this.state = { text: null, list: [] };
     this.busy = null; this.name = "";
     this.input = InputState.new({ value: "", placeholder: "New profile name, e.g. b or work" });
@@ -164,9 +165,9 @@ export default class Profiles extends View {
     };
     return v_flex().id("k-profiles").track_focus(this.handle)
       .on_key_down((e, cx) => { if (e.key === "escape") { closeOverlay(p.overlay); cx.stop_propagation(); } })
-      .w_full().min_h(0).p(18).gap(10).bg(t.popover).text_color(t.foreground).text_size(13)
+      .w_full().min_h(0).p(18).gap(10).when(!this.embedded, el => el.bg(t.popover)).text_color(t.foreground).text_size(13)
       .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().child("Profiles"))
-        .child(div().text_size(11).text_color(t.dim).child("Esc")))
+        .when(!this.embedded, el => el.child(div().text_size(11).text_color(t.dim).child("Esc"))))
       .child(div().text_size(12).text_color(t.muted).child(window()?.platform === "windows"
         ? "Each profile is another Herdr window with its own layout, settings and shown space (same terminals). It gets a Start menu entry, \"Herdr (name)\"."
         : "Each profile is another Herdr window with its own layout, settings and shown space (same terminals). It gets an app menu entry, \"Herdr (name)\"."))

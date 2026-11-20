@@ -1,12 +1,12 @@
-// Tests for mods/k-mods/core.js (run: node --test tests/). Derived from the tests of
-// jacksonpires/herdr-app-mod-manager (MIT, see mods/k-mods/LICENSE).
+// Tests for mods/k-settings/core.js (the Mods page, was k-mods) (run: node --test tests/). Derived from the tests of
+// jacksonpires/herdr-app-mod-manager (MIT, see mods/k-settings/LICENSE).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import * as core from "../mods/k-mods/core.js";
+import * as core from "../mods/k-settings/core.js";
 
 const io = {
   platform: process.platform === "darwin" ? "macos" : "linux",
@@ -195,13 +195,13 @@ test("removing a local symlinked mod only unlinks it", async () => {
 
 test("disable moves a mod aside and enable brings it back; layouts and built-ins block it", async () => {
   const app = home();
-  put(app, { "mods/free/main.js": "f", "mods/k-mods/main.js": "" });
+  put(app, { "mods/free/main.js": "f", "mods/k-settings/main.js": "" });
   const find = async (name) => (await core.listMods(io, { appHome: app, records: [] })).find((m) => m.name === name);
 
   assert.equal(await core.disableBlocker(io, { appHome: app, mod: await find("free") }), null);
   assert.match(await core.disableBlocker(io, { appHome: app, mod: await find("mine") }), /Used by layout k-main/);
   assert.match(await core.disableBlocker(io, { appHome: app, mod: await find("agents") }), /Built-in/);
-  assert.match(await core.disableBlocker(io, { appHome: app, mod: await find("k-mods") }), /itself/);
+  assert.match(await core.disableBlocker(io, { appHome: app, mod: await find("k-settings") }), /itself/);
   assert.deepEqual(await core.layoutsUsing(io, app, "agents"), ["main"]);
 
   await core.disable(io, { appHome: app, name: "free" });

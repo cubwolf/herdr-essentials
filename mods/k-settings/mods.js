@@ -1,4 +1,4 @@
-// k-mods (herdr-essentials): a mod manager laid out like VS Code's extensions view. Left: search,
+// k-settings Mods page (herdr-essentials, was k-mods): a mod manager laid out like VS Code's extensions view. Left: search,
 // Installed / Marketplace tabs and a clickable list; right: the selected mod's details and its
 // actions (install with a review of what the code does, update, uninstall, enable / disable).
 //
@@ -27,6 +27,7 @@ const anonymous = async (url) => {
 
 export default class KMods extends View {
   init(_props, cx) {
+    this.embedded = Boolean(_props?.embedded); // a page of k-settings, not its own dialog
     this.io = {
       get platform() { return window()?.platform ?? "linux"; },
       exec: (cmd, args, opts) => exec(cmd, args, opts),
@@ -256,7 +257,7 @@ export default class KMods extends View {
 
   askUninstall(mod) {
     if (mod.kind === "herdr") return this.say("Herdr's own mods can't be removed; they come back with every app start.", "error");
-    if (mod.name === core.SELF) return this.say("k-mods can't uninstall itself.", "error");
+    if (mod.name === core.SELF) return this.say("The mod manager (k-settings) can't uninstall itself.", "error");
     const what = mod.record
       ? `Delete ${mod.record.mods.map((m) => `mods/${m}`).join(", ")}${mod.record.layouts?.length ? `, layouts ${mod.record.layouts.join(", ")}` : ""} and the keys it added.`
       : mod.symlink ? `Remove the link mods/${mod.name}; the folder it points to stays.`
@@ -602,7 +603,7 @@ export default class KMods extends View {
       : this.message
         ? div().text_size(12).text_color(this.message.level === "error" ? t.blocked : this.message.level === "success" ? t.done : t.foreground).child(this.message.text)
         : null;
-    return v_flex().id("root").track_focus(this.handle).size_full().p(16).gap(12).bg(t.popover).text_size(13).text_color(t.foreground)
+    return v_flex().id("root").track_focus(this.handle).size_full().p(16).gap(12).when(!this.embedded, (el) => el.bg(t.popover)).text_size(13).text_color(t.foreground)
       .on_key_down((e, cx) => this.onKey(e, cx))
       .child(h_flex().gap(10).items_center()
         .child(div().text_size(15).font_semibold().child("Mods"))
@@ -612,7 +613,7 @@ export default class KMods extends View {
           .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Reload the list and check for updates")
           .on_click((_e, cx) => { if (this.tab === "market") cx.spawn(async (cx) => this.loadMarket(cx, true)); cx.spawn(async (cx) => this.refresh(cx)); })
           .child("Reload"))
-        .child(div().text_size(11).text_color(t.dim).child("Esc")))
+        .when(!this.embedded, (el) => el.child(div().text_size(11).text_color(t.dim).child("Esc"))))
       .child(h_flex().flex_1().min_h(0).gap(14).items_start()
         .child(this.leftColumn(t).h_full())
         .child(v_flex().flex_1().min_w(0).h_full().p(16).gap(12).rounded(10).border_1().border_color(t.border).bg(t.surface).children(right.filter(Boolean))))

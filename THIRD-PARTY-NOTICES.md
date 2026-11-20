@@ -7,8 +7,8 @@ notices are kept as required.
 
 - Source: https://github.com/jacksonpires/herdr-app-mod-manager
 - Copyright (c) 2026 speardragon, Copyright (c) 2026 Jackson Pires
-- License: MIT, full text in [`mods/k-mods/LICENSE`](mods/k-mods/LICENSE)
-- Used in: `mods/k-mods/` (`core.js`, `main.js`, `mod.json`) and `tests/k-mods.test.js`.
+- License: MIT, full text in [`mods/k-settings/LICENSE`](mods/k-settings/LICENSE)
+- Used in: `mods/k-settings/` (`core.js`, `mods.js`; was `mods/k-mods/`) and `tests/k-mods.test.js`.
   k-mods is a modified version: English UI, a VS Code-style mouse-first layout, a platform file
   layer for Windows, and enable / disable. Each derived file says so in its header.
 

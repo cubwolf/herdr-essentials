@@ -23,6 +23,10 @@ for m in "$HERE"/mods/*/; do
   if [ "$MODE" = link ]; then ln -s "$src" "$dst"; echo "mod: $name -> $src"
   else mkdir -p "$dst"; cp -r "$src/." "$dst/"; echo "mod: $name (copy)"; fi
 done
+# 舊版的 k-profiles、k-mods 已併進 k-settings(Settings 裡的 Profiles、Mods 頁):拿掉留在 App home 的舊 link / 複本。
+for old in k-profiles k-mods; do
+  if [ -L "$H/mods/$old" ] || [ -d "$H/mods/$old" ]; then rm -rf "$H/mods/$old"; echo "mod: $old 已併進 k-settings,移除舊的"; fi
+done
 K=$H/layouts/k-main.json
 if [ -e "$K" ]; then
   echo "layout: k-main.json 已存在,不重做;只補上新版的換法"
@@ -32,14 +36,14 @@ else
     || { echo "layout: main.json 裡找不到 tabs / spaces block,k-main.json 可能沒換到,請手動檢查" >&2; exit 1; }
   echo "layout: k-main.json"
 fi
-# k-chrome(左下多 Profiles、Mods 兩列):換掉 workspace-chrome,底部從 69px 加高到 125px 放得下四列;
-# 舊版裝過的(97px,三列)補加高到 125px。重跑不會重複換。
+# k-chrome(Settings 開 k-settings,裡面有 Profiles、Mods 頁):換掉 workspace-chrome,底部維持兩列的 69px;
+# 舊版裝過的(97px 三列、125px 四列)縮回 69px。重跑不會重複換。
 if ! grep -q '"k-chrome"' "$K"; then
-  sed -i.bak -E 's/"mod": *"workspace-chrome"/"mod": "k-chrome"/g; s/"px": *69([^0-9]|$)/"px": 125\1/' "$K" && rm -f "$K.bak"
-  grep -q '"k-chrome"' "$K" && echo "layout: k-main 換成 k-chrome(Profiles、Mods)" || echo "layout: 找不到 workspace-chrome,Profiles / Mods 入口沒加上(用 herdr-app do mod.open --name k-profiles / k-mods 開)" >&2
-elif grep -qE '"px": *97([^0-9]|$)' "$K"; then
-  sed -i.bak -E 's/"px": *97([^0-9]|$)/"px": 125\1/' "$K" && rm -f "$K.bak"
-  echo "layout: k-main 底部加高到 125px(多一列 Mods)"
+  sed -i.bak -E 's/"mod": *"workspace-chrome"/"mod": "k-chrome"/g' "$K" && rm -f "$K.bak"
+  grep -q '"k-chrome"' "$K" && echo "layout: k-main 換成 k-chrome(Settings 裡有 Profiles、Mods)" || echo "layout: 找不到 workspace-chrome,Settings 還是內建版(用 herdr-app do mod.open --name k-settings 開)" >&2
+elif grep -qE '"px": *(97|125)([^0-9]|$)' "$K"; then
+  sed -i.bak -E 's/"px": *(97|125)([^0-9]|$)/"px": 69\2/' "$K" && rm -f "$K.bak"
+  echo "layout: k-main 底部縮回 69px(Profiles、Mods 移進 Settings)"
 fi
 # k-agents(agent 列右鍵「Copy address」):換掉內建 agents。重跑不會重複換。
 if ! grep -q '"k-agents"' "$K"; then

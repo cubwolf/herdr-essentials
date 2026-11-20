@@ -1,4 +1,4 @@
-// k-mods (herdr-essentials): everything the manager does to files, with no dependency on the Herdr
+// k-settings Mods page (herdr-essentials, was k-mods): everything the manager does to files, with no dependency on the Herdr
 // runtime. The view passes `io` ({ platform, exec, readText, writeText }) so the same code runs
 // under `node --test` against real git.
 //
@@ -7,7 +7,7 @@
 // Windows instead of find/ls/cp/rm/mkdir/open), enable/disable, layout-use checks.
 
 export const MARKET_TOPIC = "herdr-mod";
-export const SELF = "k-mods";
+export const SELF = "k-settings"; // the mod this manager lives in
 export const DISABLED_DIR = "mods-disabled";
 
 // ---------------------------------------------------------------------------------------------
@@ -352,7 +352,7 @@ export async function layoutsUsing(io, appHome, name) {
 // Why `mod` can't be disabled, or null when it can.
 export async function disableBlocker(io, { appHome, mod }) {
   if (mod.kind === "herdr") return "Built-in Herdr mods can't be disabled.";
-  if (mod.name === SELF) return "k-mods can't disable itself.";
+  if (mod.name === SELF) return "The mod manager (k-settings) can't disable itself.";
   const used = await layoutsUsing(io, appHome, mod.name);
   if (used.length) return `Used by layout${used.length > 1 ? "s" : ""} ${used.join(", ")}; switch those layouts off it first.`;
   return null;
