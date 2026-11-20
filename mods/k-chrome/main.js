@@ -1,4 +1,4 @@
-// k-chrome (herdr-essentials): the shipped workspace-chrome, plus a Profiles row in the sidebar footer.
+// k-chrome (herdr-essentials): the shipped workspace-chrome, plus Profiles and Mods rows in the sidebar footer.
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";
@@ -46,7 +46,9 @@ export default class WorkspaceChrome extends View {
           .when(Boolean(updates().app.ready), el => el.child(collapsed ? ready.absolute().top(5).right(6) : ready)))
         .child(row("machine", "plus", "Add machine", true, () => run("mod.open", { name: "machine-add" })))
         // k-chrome: windows with their own app home (layout, spaces, settings), one shortcut each.
-        .child(row("profiles", "layers", "Profiles", true, () => run("mod.open", { name: "k-profiles" })));
+        .child(row("profiles", "layers", "Profiles", true, () => run("mod.open", { name: "k-profiles" })))
+        // k-chrome: the mod manager (installed mods, marketplace, enable / disable).
+        .child(row("mods", "archive", "Mods", true, () => run("mod.open", { name: "k-mods" })));
     }
     return h_flex().size_full().bg(t.chrome).pl(collapsed ? 6 : 14).pr(10).gap(4).items_center().text_size(13.5)
       .when(window()?.platform === "macos" && !window()?.fullscreen && !collapsed, el => el.pl(76))

@@ -24,9 +24,13 @@ else
     || { echo "layout: main.json 裡找不到 tabs / spaces block,k-main.json 可能沒換到,請手動檢查" >&2; exit 1; }
   echo "layout: k-main.json"
 fi
-# k-chrome(左下多一列 Profiles):換掉 workspace-chrome,底部從 69px 加高到 97px 放得下三列。重跑不會重複換。
+# k-chrome(左下多 Profiles、Mods 兩列):換掉 workspace-chrome,底部從 69px 加高到 125px 放得下四列;
+# 舊版裝過的(97px,三列)補加高到 125px。重跑不會重複換。
 if ! grep -q '"k-chrome"' "$K"; then
-  sed -i.bak -E 's/"mod": *"workspace-chrome"/"mod": "k-chrome"/g; s/"px": *69([^0-9]|$)/"px": 97\1/' "$K" && rm -f "$K.bak"
-  grep -q '"k-chrome"' "$K" && echo "layout: k-main 換成 k-chrome(Profiles)" || echo "layout: 找不到 workspace-chrome,Profiles 入口沒加上(用 herdr-app do mod.open --name k-profiles 開)" >&2
+  sed -i.bak -E 's/"mod": *"workspace-chrome"/"mod": "k-chrome"/g; s/"px": *69([^0-9]|$)/"px": 125\1/' "$K" && rm -f "$K.bak"
+  grep -q '"k-chrome"' "$K" && echo "layout: k-main 換成 k-chrome(Profiles、Mods)" || echo "layout: 找不到 workspace-chrome,Profiles / Mods 入口沒加上(用 herdr-app do mod.open --name k-profiles / k-mods 開)" >&2
+elif grep -qE '"px": *97([^0-9]|$)' "$K"; then
+  sed -i.bak -E 's/"px": *97([^0-9]|$)/"px": 125\1/' "$K" && rm -f "$K.bak"
+  echo "layout: k-main 底部加高到 125px(多一列 Mods)"
 fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
