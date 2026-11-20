@@ -40,12 +40,19 @@ export function quote(path, windows) {
 }
 
 export async function attach(cx) {
+  const terminal = focused()?.terminal;
+  if (!terminal) { notify({ title: "Attach", body: "Click a terminal first.", level: "warning" }); return; }
+  const files = await pick(window()?.platform ?? "linux");
+  if (files.length) await pasteFiles(cx, files);
+}
+
+// Paste files' paths into the focused terminal, no Enter. `restore(cx, before)` gives the
+// clipboard back afterwards; by default the person's text goes back.
+export async function pasteFiles(cx, files, restore = (cx, before) => { if (before !== undefined) cx.write_to_clipboard(before); }) {
   const f = focused();
   const terminal = f?.terminal;
-  if (!terminal) { notify({ title: "Attach", body: "Click a terminal first.", level: "warning" }); return; }
+  if (!terminal) return false;
   const platform = window()?.platform ?? "linux";
-  const files = await pick(platform);
-  if (!files.length) return;
   // A terminal on another machine gets copies beside it, like a file drop onto it.
   const machine = spaces().find(s => s.id === f.space)?.machine ?? null;
   let paths = files, remoteWindows = false;
@@ -53,7 +60,7 @@ export async function attach(cx) {
     paths = [];
     for (const file of files) {
       const r = await hc(["put", terminal.includes("/") ? terminal : `${machine}/${terminal}`, file, "--json"]);
-      if (r.code !== 0) { notify({ title: "Attach failed", body: (r.stderr || r.stdout).trim().slice(0, 300), level: "error" }); return; }
+      if (r.code !== 0) { notify({ title: "Attach failed", body: (r.stderr || r.stdout).trim().slice(0, 300), level: "error" }); return false; }
       let landed = r.stdout.trim();
       try { const j = JSON.parse(landed); landed = j.path ?? j.landed ?? j.file ?? Object.values(j).find(v => typeof v === "string") ?? landed; } catch {}
       paths.push(landed);
@@ -62,10 +69,11 @@ export async function attach(cx) {
   }
   const windows = machine ? remoteWindows : platform === "windows";
   const text = paths.map(p => quote(p, windows)).join(" ") + " ";
-  // terminal.paste reads the clipboard: borrow it, then give the person's text back.
+  // terminal.paste reads the clipboard: borrow it, then give it back.
   const before = cx.read_from_clipboard();
   cx.write_to_clipboard(text);
   run("pane.focus", { terminal });
   run("terminal.paste");
-  cx.timer.after(600, (cx) => { if (before !== undefined && cx.read_from_clipboard() === text) cx.write_to_clipboard(before); });
+  cx.timer.after(600, (cx) => { if (cx.read_from_clipboard() === text) restore(cx, before); });
+  return true;
 }

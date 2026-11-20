@@ -3,6 +3,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, focused } from "herdr";
 import { attach } from "./attach.js";
+import { watchClipboard, pasteShot } from "./shot.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -30,8 +31,11 @@ function label(tab, lead) {
 }
 
 export default class Tabs extends View {
-  init() {
+  init(_props, cx) {
     this.pressed = null;
+    // k-tabs: "Paste shot" shows only while the clipboard holds an image.
+    this.clipImage = false;
+    cx.spawn(async (cx) => watchClipboard(() => true, (on) => { this.clipImage = on; cx.notify(); }));
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
@@ -157,6 +161,12 @@ export default class Tabs extends View {
         .tooltip("Attach files: paste their paths into the terminal")
         .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => attach(cx)); })
         .child(svg("mods/k-tabs/paperclip.svg").size(14)).child("Attach")))
+      // k-tabs: the clipboard holds an image -> save it as a PNG and paste that like Attach.
+      .when(this.clipImage && Boolean(focused()?.terminal), el => el.child(h_flex().id("paste-shot").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+        .text_size(12).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+        .tooltip("Paste the clipboard image into the terminal")
+        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => pasteShot(cx)); })
+        .child(svg("mods/k-tabs/image.svg").size(14)).child("Paste shot")))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/k-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
