@@ -1,6 +1,9 @@
 // k-spaces (herdr-essentials): the menu behind a machine's "+". Lists the GitHub repos that
 // machine's `gh` can see (yours, your orgs', collaborations), marks the ones already cloned there,
-// and opens a space in a clone, cloning it first into that machine's default folder when needed.
+// and opens a space in a clone, cloning it first into that machine's repo folder when needed.
+// The repo folder starts as a guess (the usual places, most repos wins), so clones already there
+// are found from the first open; it's always shown above the list, and Choose changes it (the
+// system folder dialog here, a typed path for a remote machine).
 // "New empty space" is the plain space.new it replaced.
 //
 // Everything runs on the chosen machine (exec `on`), so its gh login and folders are the ones used.
@@ -20,6 +23,27 @@ function slugOf(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 const sameDir = (a, b) => String(a ?? "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase() === String(b ?? "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+// The system's folder dialog on this computer (as k-tabs' Attach does files): a path, or "" when cancelled.
+async function pickFolder(platform, start) {
+  const long = { timeout: 600000 };
+  const out = (r) => (r.code === 0 ? (r.stdout ?? "").trim() : "");
+  if (platform === "windows") {
+    const ps = [
+      "Add-Type -AssemblyName System.Windows.Forms",
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+      "$o = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
+      "$d = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = 'Folder you keep repos in'; ShowNewFolderButton = $true }",
+      `$d.SelectedPath = '${String(start).replace(/'/g, "''")}'`,
+      "if ($d.ShowDialog($o) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }",
+    ].join("; ");
+    return out(await exec("powershell.exe", ["-NoProfile", "-STA", "-Command", ps], long));
+  }
+  if (platform === "macos")
+    return out(await exec("osascript", ["-e", 'POSIX path of (choose folder with prompt "Folder you keep repos in")'], long)).replace(/\/$/, "");
+  try { return out(await exec("zenity", ["--file-selection", "--directory", "--title=Folder you keep repos in", ...(start ? [`--filename=${start}/`] : [])], long)); }
+  catch { return out(await exec("kdialog", ["--getexistingdirectory", start || "."], long)); }
+}
+
 const ago = (iso) => {
   const d = (Date.now() - Date.parse(iso)) / 86400000;
   return !isFinite(d) ? "" : d < 1 ? "today" : d < 30 ? `${Math.floor(d)}d` : d < 365 ? `${Math.floor(d / 30)}mo` : `${Math.floor(d / 365)}y`;
@@ -37,11 +61,13 @@ export default class RepoMenu extends View {
     this.query = "";
     this.picked = null;                              // a repo waiting for "Clone"
     this.busy = null;
+    this.editing = false;                            // the repo folder's field is open (remote machines)
+    this.choosing = false;                           // the folder dialog is up (this computer)
     this.search = InputState.new({ placeholder: "Search repos" });
     this.search.on("change", (_e, cx) => { this.query = this.search.value().trim().toLowerCase(); cx.notify(); });
     this.search.on("submit", (_e, cx) => { const first = this.list()[0]; if (first) this.choose(first, cx); });
-    this.baseInput = InputState.new({ placeholder: "Folder to clone into" });
-    this.baseInput.on("submit", (_e, cx) => this.clone(cx));
+    this.baseInput = InputState.new({ placeholder: "Folder you keep repos in" });
+    this.baseInput.on("submit", (_e, cx) => this.setBase(cx));
     cx.timer.after(60, () => this.search.focus());
     cx.spawn(async (cx) => this.load(cx));
   }
@@ -71,9 +97,10 @@ export default class RepoMenu extends View {
 
   async load(cx) {
     try {
-      const sys = await this.system();
-      if (!this.base()) this.baseInput.set_value(sys.home ? `${sys.home}${sys.sep}projects` : "");
-      else this.baseInput.set_value(this.base());
+      await this.system();
+      // The first time, the guess is the repo folder (shown above the list, Choose changes it).
+      if (!this.base()) { const g = await this.guess(); if (g) saveFor(this.mk, { base: g }); }
+      this.baseInput.set_value(this.base() ?? "");
       cx.notify();
       await Promise.all([this.loadRepos(), this.scan(), this.prune()]);
     } catch (e) { this.error = String(e?.message ?? e); }
@@ -103,7 +130,61 @@ export default class RepoMenu extends View {
       .sort((a, b) => String(b.pushed).localeCompare(String(a.pushed)));
   }
 
-  // Clones under the default folder, one or two levels down, by their origin.
+  // Where repos probably live: the usual places, the one with the most git repos (default ~/projects).
+  async guess() {
+    const sys = await this.system();
+    if (!sys.home) return "";
+    const names = ["projects", "Desktop/projects", "code", "src", "workspace", "repos", "git", "dev", "Documents/GitHub"];
+    const dirs = names.map((n) => `${sys.home}${sys.sep}${n.split("/").join(sys.sep)}`);
+    let r;
+    try {
+      r = sys.posix
+        ? await this.run("sh", ["-c", 'for d in "$@"; do n=0; for g in "$d"/*/.git; do [ -e "$g" ] && n=$((n+1)); done; printf "%s\\t%s\\n" "$n" "$d"; done', "sh", ...dirs])
+        : await this.run("powershell.exe", ["-NoProfile", "-Command",
+          `foreach ($d in @(${dirs.map((d) => `'${d.replace(/'/g, "''")}'`).join(",")})) { $n = 0; if (Test-Path -LiteralPath $d) { $n = @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName '.git') }).Count }; "$n\`t$d" }`]);
+    } catch { return dirs[0]; }
+    let best = null;
+    for (const line of (r.stdout ?? "").split(/\r?\n/)) {
+      const [n, d] = line.split("\t");
+      if (d && +n > 0 && (!best || +n > best.n)) best = { n: +n, d: d.trim() };
+    }
+    return best?.d ?? dirs[0];
+  }
+
+  // Choose: the system folder dialog on this computer. A remote machine's folders aren't on this
+  // screen's dialog, so there the folder is typed (the field opens instead).
+  choose_base(cx) {
+    if (this.machine) {
+      this.editing = true;
+      this.baseInput.set_value(this.base() ?? "");
+      cx.timer.after(30, () => this.baseInput.focus());
+      cx.notify();
+      return;
+    }
+    if (this.choosing) return;
+    this.choosing = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const dir = await pickFolder(window()?.platform, this.base() ?? "");
+        if (dir) { this.baseInput.set_value(dir); this.setBase(cx); }
+      } catch (e) { this.error = `Couldn't open the folder dialog: ${String(e?.message ?? e)}`; }
+      this.choosing = false;
+      cx.notify();
+    });
+  }
+
+  setBase(cx) {
+    const base = this.baseInput.value().trim().replace(/[\\/]+$/, "");
+    if (!base) return;
+    saveFor(this.mk, { base });
+    this.editing = false;
+    this.found = {};
+    cx.notify();
+    cx.spawn(async (cx) => { await this.scan(); cx.notify(); });
+  }
+
+  // Clones under the repo folder, one or two levels down, by their origin.
   async scan() {
     const base = this.base();
     if (!base) return;
@@ -160,13 +241,13 @@ export default class RepoMenu extends View {
     const path = this.where(repo);
     if (path) return this.open(path);
     this.picked = repo;
-    cx.timer.after(30, () => this.baseInput.focus());
+    if (!this.base()) this.choose_base(cx);
     cx.notify();
   }
 
   clone(cx) {
     const repo = this.picked;
-    const base = this.baseInput.value().trim().replace(/[\\/]+$/, "");
+    const base = this.base();
     if (!repo || !base || this.busy) return;
     this.busy = `Cloning ${repo.full}…`;
     cx.notify();
@@ -179,7 +260,7 @@ export default class RepoMenu extends View {
         if (mk.code !== 0) throw new Error(mk.stderr || "couldn't make the folder");
         const r = await this.run("gh", ["repo", "clone", repo.full, dest], 600000);
         if (r.code !== 0) throw new Error((r.stderr || r.stdout || "clone failed").trim().slice(0, 300));
-        saveFor(this.mk, { base, clones: { ...this.clones(), [repo.slug]: dest } });
+        saveFor(this.mk, { clones: { ...this.clones(), [repo.slug]: dest } });
         notify({ title: "Cloned", body: `${repo.full} → ${dest}`, level: "success" });
         this.open(dest);
       } catch (e) {
@@ -207,25 +288,43 @@ export default class RepoMenu extends View {
     const t = theme();
     const list = this.list();
     const where = this.machine ?? "this computer";
+    const base = this.base();
+    const button = (id, label, action, primary) => div().id(id).h(28).px(10).flex().items_center().rounded(6).flex_none().text_size(12)
+      .when(primary, (el) => el.font_medium().bg(t.solid ?? t.accent).text_color(t.solid_foreground ?? "#ffffff").hover((s) => s.opacity(0.88)))
+      .when(!primary, (el) => el.text_color(t.muted).hover((s) => s.bg(t.hover)))
+      .cursor_pointer().on_click(action).child(label);
     return v_flex().id("repo-menu").size_full().p(6).gap(6).bg(t.popover).text_size(12.5).text_color(t.foreground)
       .child(h_flex().gap(6).items_center().px(4)
-        .child(div().flex_1().text_size(11).text_color(t.dim).child(`Open a repo on ${where}`))
-        .when(this.repos === null, (el) => el.child(div().text_size(11).text_color(t.dim).child("Loading…"))))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`Open a repo on ${where}`))
+        .when(this.repos === null, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child("Loading…"))))
+      // The repo folder, always shown: clones there are found, new ones go there. Choose changes it.
+      .child(h_flex().gap(6).items_center().pl(8).pr(2).h(32).flex_none().rounded(6).border_1().border_color(t.border)
+        .child(svg("mods/workspace-chrome/folder.svg").size(13).flex_none().text_color(t.dim))
+        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(base ? t.foreground : t.dim).tooltip(base ?? "").child(base ?? "No repo folder yet"))
+        .child(div().id("repo-base-choose").h(24).px(9).flex().items_center().rounded(5).flex_none().text_size(11.5)
+          .text_color(t.muted).bg(t.raised ?? t.hover).hover((s) => s.text_color(t.foreground))
+          .when(!this.choosing, (el) => el.cursor_pointer().on_click((_e, cx) => this.choose_base(cx)))
+          .child(this.choosing ? "Choosing…" : "Choose")))
+      // A remote machine's folder is typed: this screen's dialog can't see its disks.
+      .when(this.editing, (el) => el.child(v_flex().gap(5).p(6).rounded(6).border_1().border_color(t.border)
+        .child(div().text_size(11.5).text_color(t.muted).child(`Folder you keep repos in on ${where}:`))
+        .child(h_flex().gap(6).items_center()
+          .child(Input.new(this.baseInput).flex_1().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))
+          .child(button("repo-base-set", "Set", (_e, cx) => this.setBase(cx), true))
+          .when(Boolean(base), (el) => el.child(button("repo-base-cancel", "Cancel", (_e, cx) => { this.editing = false; cx.notify(); }, false))))))
       .child(Input.new(this.search).h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))
       .when(Boolean(this.error), (el) => el.child(div().px(6).text_size(11.5).text_color(t.blocked).child(this.error)))
       .child(v_flex().id("repo-list").flex_1().min_h(0).overflow_y_scroll().gap(1)
         .children(list.slice(0, 200).map((r, i) => this.row(t, r, i)))
         .when(this.repos !== null && !list.length && !this.error, (el) => el.child(div().px(8).py(6).text_color(t.dim).child("No repos match."))))
-      .when(Boolean(this.picked), (el) => el.child(v_flex().gap(5).p(6).rounded(6).border_1().border_color(t.border)
-        .child(div().text_size(11.5).text_color(t.muted).child(`Clone ${this.picked.full} into (kept as ${where}'s default):`))
-        .child(h_flex().gap(6).items_center()
-          .child(Input.new(this.baseInput).flex_1().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))
-          .child(div().id("repo-clone").h(28).px(10).flex().items_center().rounded(6).flex_none().text_size(12).font_medium()
-            .bg(t.solid ?? t.accent).text_color(t.solid_foreground ?? "#ffffff")
-            .when(!this.busy, (el) => el.cursor_pointer().hover((s) => s.opacity(0.88)).on_click((_e, cx) => this.clone(cx)))
-            .when(Boolean(this.busy), (el) => el.opacity(0.6))
-            .child(this.busy ? "Cloning…" : "Clone")))
-        .when(Boolean(this.busy), (el) => el.child(div().text_size(11).text_color(t.working ?? t.dim).child(this.busy)))))
+      .when(Boolean(this.picked) && Boolean(base) && !this.editing, (el) => el.child(h_flex().gap(6).items_center().p(6).rounded(6).border_1().border_color(t.border)
+        .child(div().flex_1().min_w(0).text_size(11.5).text_color(this.busy ? (t.working ?? t.muted) : t.muted)
+          .child(this.busy ?? `Clone ${this.picked.full} to ${base}${this.sys?.sep ?? "/"}${this.picked.name}`))
+        .child(div().id("repo-clone").h(28).px(10).flex().items_center().rounded(6).flex_none().text_size(12).font_medium()
+          .bg(t.solid ?? t.accent).text_color(t.solid_foreground ?? "#ffffff")
+          .when(!this.busy, (el) => el.cursor_pointer().hover((s) => s.opacity(0.88)).on_click((_e, cx) => this.clone(cx)))
+          .when(Boolean(this.busy), (el) => el.opacity(0.6))
+          .child(this.busy ? "Cloning…" : "Clone"))))
       .child(div().h(1).flex_none().bg(t.border))
       .child(h_flex().id("repo-empty").h(30).px(8).gap(8).items_center().rounded(6).cursor_pointer().flex_none().text_color(t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
