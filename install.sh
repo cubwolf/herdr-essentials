@@ -33,4 +33,9 @@ elif grep -qE '"px": *97([^0-9]|$)' "$K"; then
   sed -i.bak -E 's/"px": *97([^0-9]|$)/"px": 125\1/' "$K" && rm -f "$K.bak"
   echo "layout: k-main 底部加高到 125px(多一列 Mods)"
 fi
+# k-agents(agent 列右鍵「Copy address」):換掉內建 agents。重跑不會重複換。
+if ! grep -q '"k-agents"' "$K"; then
+  sed -i.bak -E 's/"mod": *"agents"/"mod": "k-agents"/g' "$K" && rm -f "$K.bak"
+  grep -q '"k-agents"' "$K" && echo "layout: k-main 換成 k-agents(右鍵 Copy address)" || echo "layout: 找不到 agents block,k-agents 沒換上" >&2
+fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
