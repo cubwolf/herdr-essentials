@@ -13,10 +13,18 @@
 ## 安裝
 
 ```sh
-./install.sh                                  # 複製 mods/ 進 App home,並用你的 main.json 做一份 k-main(換成 k-tabs / k-spaces)
+git clone https://github.com/kirinchen/herdr-essentials.git
+cd herdr-essentials
+./install.sh                                  # App home 的 mods/k-* 以 symlink 指到這個 repo,並用你的 main.json 做一份 k-main(換成 k-tabs / k-spaces)
 herdr-app do layout.switch --name k-main      # 換過去;回原樣:--name main(或 ctrl-alt-shift-escape)
 ```
 
+- **symlink 模式(預設)**:改 repo 裡的 `mods/` 即熱重載,直接 `git commit` / `push`;其他機器 `git pull` 就同步,不必重跑。
+- **複製模式**:`./install.sh --copy`。Windows 沒開 symlink 權限時用;之後有改動要重跑才會更新。
+- `k-main.json` 是從本機的 `main.json` 產生的,放在 App home,不在 repo;已存在就不覆蓋,要重做先刪掉。
+- App 會在每個 mod 目錄自動寫入 `gpui-kit.d.ts`、`jsconfig.json`,已在 `.gitignore`。
+
+herdr-app 本身沒有同步 mod 的功能,每台機器都要 clone + `./install.sh` 一次。
 內建 mod / layout 每次啟動會被 Herdr 覆蓋,所以一律用 `k-` 前綴的複本。以 herdr-app 0.1.16 的內建版為底。
 
 ## 開發
