@@ -10,9 +10,12 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, props } from "herdr";
 import RepoMenu from "./repos.js";
+import AgentMenu from "./agents.js";
 
 // k-spaces: a machine's "+" opens a menu of its GitHub repos (repos.js); this mod again, as a popup.
-const repoMenu = (m) => openOverlay({ mod: "k-spaces", kind: "popup", width: 400, height: 460, props: { repoMenu: true, machine: m ?? null } });
+// k-spaces: a space row's "+" opens a new-tab menu for that space: terminal or agent, YOLO or not (agents.js).
+const agentMenu = (w) => openOverlay({ mod: "k-spaces", kind: "popup", width: 270, height: 400, props: { agentMenu: true, space: w.id, machine: w.machine ?? null } });
+const repoMenu = (m) => openOverlay({ mod: "k-spaces", kind: "popup", width: 400, height: 520, props: { repoMenu: true, machine: m ?? null } });
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -71,6 +74,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.agentMenu === true) { const m = props().machine; this.repoView = cx.new(AgentMenu, { space: props().space, machine: typeof m === "string" && m ? m : null }); return; }
     if (props()?.repoMenu === true) { const m = props().machine; this.repoView = cx.new(RepoMenu, { machine: typeof m === "string" && m ? m : null }); return; }
     try { this.tabsOpen = new Set(JSON.parse(localStorage.getItem("k.tabs.open") ?? "[]")); } catch { this.tabsOpen = new Set(); }
     // k-spaces: Del ends the tab last pressed in the fold-out list, while the list has the keyboard.
@@ -507,8 +511,19 @@ export default class Spaces extends View {
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .child(this.addTab(w, t))
           .child(this.tabsToggle(w, t)),
       );
+  }
+
+  // k-spaces: "+" after a space's name: a new tab there, a terminal or an agent (agents.js).
+  addTab(w, t) {
+    return div().id(`tab-add-${w.id}`).flex_none().size(20).rounded(4).flex().items_center().justify_center()
+      .text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+      .tooltip("New tab here: terminal or agent")
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); agentMenu(w); })
+      .child(svg("mods/workspace-chrome/plus.svg").size(11));
   }
 
   // k-spaces: the fold-out arrow after a space's name; a count of put-away tabs beside it.

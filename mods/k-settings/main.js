@@ -6,7 +6,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar, InputState, Input, Popup } from "gpui-base";
-import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window } from "herdr";
+import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, setShared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window } from "herdr";
 import Profiles from "./profiles.js";
 import KMods from "./mods.js";
 
@@ -943,6 +943,12 @@ export default class Settings extends View {
     return h_flex()
       .id("settings")
       .track_focus(this.handle)
+      // k-pick reads this to outline the dialog (a dialog sits centered; only its size is unknown there).
+      .on_size_change((size) => {
+        const sizes = shared("k-pick.sizes") ?? {}, was = sizes["k-settings"];
+        if (!was || Math.round(was.width) !== Math.round(size.width) || Math.round(was.height) !== Math.round(size.height))
+          setShared("k-pick.sizes", { ...sizes, "k-settings": { width: Math.round(size.width), height: Math.round(size.height) } });
+      })
       .when(Boolean(this.picking), (el) => el.on_action("overlay.close", (_e, cx) => {
         this.picking = null;
         this.handle.focus();

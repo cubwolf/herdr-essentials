@@ -3,7 +3,8 @@
 // and opens a space in a clone, cloning it first into that machine's repo folder when needed.
 // The repo folder starts as a guess (the usual places, most repos wins), so clones already there
 // are found from the first open; it's always shown above the list, and Choose changes it (the
-// system folder dialog here, a typed path for a remote machine).
+// system folder dialog here; for a remote machine, whose disks that dialog can't see, a folder
+// browser in this menu that lists that machine's folders, which can also open a space there).
 // "New empty space" is the plain space.new it replaced.
 //
 // Everything runs on the chosen machine (exec `on`), so its gh login and folders are the ones used.
@@ -61,13 +62,16 @@ export default class RepoMenu extends View {
     this.query = "";
     this.picked = null;                              // a repo waiting for "Clone"
     this.busy = null;
-    this.editing = false;                            // the repo folder's field is open (remote machines)
+    this.browse = null;                              // remote folder browser: { path, dirs, error, busy }
     this.choosing = false;                           // the folder dialog is up (this computer)
     this.search = InputState.new({ placeholder: "Search repos" });
     this.search.on("change", (_e, cx) => { this.query = this.search.value().trim().toLowerCase(); cx.notify(); });
     this.search.on("submit", (_e, cx) => { const first = this.list()[0]; if (first) this.choose(first, cx); });
     this.baseInput = InputState.new({ placeholder: "Folder you keep repos in" });
     this.baseInput.on("submit", (_e, cx) => this.setBase(cx));
+    // The browser's path: Enter goes there.
+    this.browseInput = InputState.new({ placeholder: "Folder path" });
+    this.browseInput.on("submit", (_e, cx) => this.goTo(this.browseInput.value().trim(), cx));
     cx.timer.after(60, () => this.search.focus());
     cx.spawn(async (cx) => this.load(cx));
   }
@@ -155,10 +159,8 @@ export default class RepoMenu extends View {
   // screen's dialog, so there the folder is typed (the field opens instead).
   choose_base(cx) {
     if (this.machine) {
-      this.editing = true;
-      this.baseInput.set_value(this.base() ?? "");
-      cx.timer.after(30, () => this.baseInput.focus());
-      cx.notify();
+      if (this.browse) { this.browse = null; cx.notify(); return; }
+      cx.spawn(async (cx) => { const sys = await this.system(); this.goTo(this.base() || sys.home, cx); });
       return;
     }
     if (this.choosing) return;
@@ -174,11 +176,55 @@ export default class RepoMenu extends View {
     });
   }
 
+  // The remote browser: list `path`'s folders on that machine (path comes back resolved).
+  goTo(path, cx) {
+    if (!path) return;
+    if (/^~([\\/]|$)/.test(path) && this.sys?.home) path = this.sys.home + path.slice(1);
+    this.browse = { path, dirs: this.browse?.dirs ?? null, error: null, busy: true };
+    this.browseInput.set_value(path);
+    cx.notify();
+    cx.spawn(async (cx) => {
+      const sys = await this.system();
+      let r;
+      try {
+        r = sys.posix
+          ? await this.run("sh", ["-c", 'cd -- "$1" || exit 1; pwd; for d in */ .[!.]*/; do [ -d "$d" ] && printf "%s\n" "${d%/}"; done; exit 0', "sh", path])
+          : await this.run("powershell.exe", ["-NoProfile", "-Command",
+            `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $p = Resolve-Path -LiteralPath '${path.replace(/'/g, "''")}' -ErrorAction Stop; $p.ProviderPath; Get-ChildItem -LiteralPath $p.ProviderPath -Directory -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }`]);
+      } catch (e) { r = { code: 1, stderr: String(e?.message ?? e) }; }
+      if (!this.browse) return;
+      if (r.code !== 0) {
+        this.browse = { ...this.browse, busy: false, error: (r.stderr || `No folder ${path} on ${this.machine}`).trim().slice(0, 200) };
+      } else {
+        const [here, ...dirs] = (r.stdout ?? "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+        // Hidden folders after the rest, each part by name.
+        dirs.sort((a, b) => (a.startsWith(".") - b.startsWith(".")) || a.localeCompare(b));
+        this.browse = { path: here || path, dirs, error: null, busy: false };
+        this.browseInput.set_value(this.browse.path);
+      }
+      cx.notify();
+    });
+  }
+
+  // One level up from the browser's folder ("/" and "C:\" stay).
+  parent(path) {
+    const sep = this.sys?.sep ?? "/";
+    const trimmed = path.replace(/[\\/]+$/, "");
+    const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+    if (i < 0) return path;
+    const up = trimmed.slice(0, i);
+    return up === "" ? "/" : /^[A-Za-z]:$/.test(up) ? up + sep : up;
+  }
+  child(path, name) {
+    const sep = this.sys?.sep ?? "/";
+    return path.endsWith("/") || path.endsWith("\\") ? path + name : `${path}${sep}${name}`;
+  }
+
   setBase(cx) {
     const base = this.baseInput.value().trim().replace(/[\\/]+$/, "");
     if (!base) return;
     saveFor(this.mk, { base });
-    this.editing = false;
+    this.browse = null;
     this.found = {};
     cx.notify();
     cx.spawn(async (cx) => { await this.scan(); cx.notify(); });
@@ -284,6 +330,31 @@ export default class RepoMenu extends View {
         : div().flex_none().text_size(10.5).text_color(t.dim).child(ago(repo.pushed)));
   }
 
+  // The remote folder browser: path (type + Enter), up, its folders (click to go in), and what to do with it.
+  browser(t, button) {
+    const b = this.browse;
+    const where = this.machine ?? "this computer";
+    return v_flex().gap(5).p(6).flex_none().rounded(6).border_1().border_color(t.border)
+      .child(div().text_size(11.5).text_color(t.muted).child(`Folders on ${where}`))
+      .child(h_flex().gap(6).items_center()
+        .child(div().id("repo-browse-up").size(28).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted)
+          .bg(t.raised ?? t.hover).hover((s) => s.text_color(t.foreground)).cursor_pointer().tooltip("Up one folder")
+          .on_click((_e, cx) => this.goTo(this.parent(b.path), cx)).child("↑"))
+        .child(Input.new(this.browseInput).flex_1().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12)))
+      .when(Boolean(b.error), (el) => el.child(div().px(2).text_size(11.5).text_color(t.blocked).child(b.error)))
+      .child(v_flex().id("repo-browse-list").h(150).overflow_y_scroll().gap(1)
+        .when(b.busy && !b.dirs, (el) => el.child(div().px(8).py(4).text_color(t.dim).child("Loading…")))
+        .when(!b.busy && b.dirs && !b.dirs.length && !b.error, (el) => el.child(div().px(8).py(4).text_color(t.dim).child("No folders here.")))
+        .children((b.dirs ?? []).slice(0, 500).map((name, i) => h_flex().id(`repo-dir-${i}`).h(24).px(6).gap(7).items_center().rounded(5).flex_none()
+          .cursor_pointer().hover((s) => s.bg(t.hover)).text_color(name.startsWith(".") ? t.dim : t.foreground)
+          .on_click((_e, cx) => this.goTo(this.child(b.path, name), cx))
+          .child(svg("mods/workspace-chrome/folder.svg").size(12).flex_none().text_color(t.dim))
+          .child(div().flex_1().min_w(0).truncate().child(name)))))
+      .child(h_flex().gap(6).items_center().justify_end()
+        .child(button("repo-browse-space", "Open a space here", () => { if (!b.busy && !b.error) this.open(b.path); }, false))
+        .child(button("repo-browse-use", "Use as repo folder", (_e, cx) => { if (b.busy || b.error) return; this.baseInput.set_value(b.path); this.setBase(cx); }, true)));
+  }
+
   render() {
     const t = theme();
     const list = this.list();
@@ -304,20 +375,15 @@ export default class RepoMenu extends View {
         .child(div().id("repo-base-choose").h(24).px(9).flex().items_center().rounded(5).flex_none().text_size(11.5)
           .text_color(t.muted).bg(t.raised ?? t.hover).hover((s) => s.text_color(t.foreground))
           .when(!this.choosing, (el) => el.cursor_pointer().on_click((_e, cx) => this.choose_base(cx)))
-          .child(this.choosing ? "Choosing…" : "Choose")))
-      // A remote machine's folder is typed: this screen's dialog can't see its disks.
-      .when(this.editing, (el) => el.child(v_flex().gap(5).p(6).rounded(6).border_1().border_color(t.border)
-        .child(div().text_size(11.5).text_color(t.muted).child(`Folder you keep repos in on ${where}:`))
-        .child(h_flex().gap(6).items_center()
-          .child(Input.new(this.baseInput).flex_1().h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))
-          .child(button("repo-base-set", "Set", (_e, cx) => this.setBase(cx), true))
-          .when(Boolean(base), (el) => el.child(button("repo-base-cancel", "Cancel", (_e, cx) => { this.editing = false; cx.notify(); }, false))))))
+          .child(this.choosing ? "Choosing…" : this.browse ? "Close" : "Choose")))
+      // A remote machine's folders, browsed here: this screen's dialog can't see its disks.
+      .when(Boolean(this.browse), (el) => el.child(this.browser(t, button)))
       .child(Input.new(this.search).h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12))
       .when(Boolean(this.error), (el) => el.child(div().px(6).text_size(11.5).text_color(t.blocked).child(this.error)))
       .child(v_flex().id("repo-list").flex_1().min_h(0).overflow_y_scroll().gap(1)
         .children(list.slice(0, 200).map((r, i) => this.row(t, r, i)))
         .when(this.repos !== null && !list.length && !this.error, (el) => el.child(div().px(8).py(6).text_color(t.dim).child("No repos match."))))
-      .when(Boolean(this.picked) && Boolean(base) && !this.editing, (el) => el.child(h_flex().gap(6).items_center().p(6).rounded(6).border_1().border_color(t.border)
+      .when(Boolean(this.picked) && Boolean(base) && !this.browse, (el) => el.child(h_flex().gap(6).items_center().p(6).rounded(6).border_1().border_color(t.border)
         .child(div().flex_1().min_w(0).text_size(11.5).text_color(this.busy ? (t.working ?? t.muted) : t.muted)
           .child(this.busy ?? `Clone ${this.picked.full} to ${base}${this.sys?.sep ?? "/"}${this.picked.name}`))
         .child(div().id("repo-clone").h(28).px(10).flex().items_center().rounded(6).flex_none().text_size(12).font_medium()
