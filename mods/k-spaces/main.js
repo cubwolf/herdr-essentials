@@ -11,6 +11,7 @@ import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, props } from "herdr";
 import RepoMenu from "./repos.js";
 import AgentMenu from "./agents.js";
+import KMenu, { hidden } from "./menu.js";
 
 // k-spaces: a machine's "+" opens a menu of its GitHub repos (repos.js); this mod again, as a popup.
 // k-spaces: a space row's "+" opens a new-tab menu for that space: terminal or agent, YOLO or not (agents.js).
@@ -74,6 +75,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.kMenu) { this.repoView = cx.new(KMenu, {}); return; }
     if (props()?.agentMenu === true) { const m = props().machine; this.repoView = cx.new(AgentMenu, { space: props().space, machine: typeof m === "string" && m ? m : null }); return; }
     if (props()?.repoMenu === true) { const m = props().machine; this.repoView = cx.new(RepoMenu, { machine: typeof m === "string" && m ? m : null }); return; }
     try { this.tabsOpen = new Set(JSON.parse(localStorage.getItem("k.tabs.open") ?? "[]")); } catch { this.tabsOpen = new Set(); }
@@ -301,9 +303,24 @@ export default class Spaces extends View {
     });
   }
 
-  menu(w) {
+  // k-spaces: its own menu (menu.js): the shipped items plus Copy path and Hide.
+  menu(w, g) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    openOverlay({ mod: "k-spaces", kind: "popup", width: 240, height: 300, props: { kMenu: "space",
+      target: { id: w.id, path: place(w, panes()) || null, git: g ? (g.linked ? "linked" : "main") : null, hidden: hidden().spaces.includes(w.id) } } });
+  }
+
+  // k-spaces: a fold-out tab row's menu: Copy path (its first terminal's folder), Copy address, Rename, New tab, Close.
+  tabMenu(w, c, lead) {
+    openOverlay({ mod: "k-spaces", kind: "popup", width: 260, height: 220, props: { kMenu: "tab",
+      target: { id: c.id, space: w.id, path: lead?.cwd || null, terminal: lead?.terminal || null } } });
+  }
+
+  // k-spaces: Hide / Unhide for this window: a machine (with its spaces) or a space. Hidden ones show,
+  // dimmed, while the Spaces header's eye is on.
+  isHidden(w) {
+    const h = hidden();
+    return h.spaces.includes(w.id) || h.machines.includes(w.machine ?? "");
   }
 
   orderingDue(now) {
@@ -353,13 +370,17 @@ export default class Spaces extends View {
 
   // The rows, under a header per machine once one isn't this computer.
   grouped(t, collapsed) {
-    const rows = this.ordered();
+    // k-spaces: hidden spaces and machines (this window) are left out unless the header's eye shows them.
+    const showHidden = shared("k-spaces.showHidden") === true;
+    const hiddenMachines = new Set(hidden().machines);
+    const rows = this.ordered().filter(r => showHidden || !this.isHidden(r.w));
     const draw = (r) => (collapsed ? this.compact(r, t) : this.withTabs(r, t));
     // Where the active space's row lands among the children this returns: the list scrolls by its direct
     // children, and machine headers, login notes and loading rows count too.
     this.activeAt = -1;
     let before = 0;
-    const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
+    const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])]
+      .filter(m => showHidden || !hiddenMachines.has(m)).sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
       return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
@@ -371,7 +392,7 @@ export default class Spaces extends View {
       this.activeAt = rows.findIndex(r => r.w.active);
       return rows.map(draw);
     }
-    const machineNames = [null, ...remote];
+    const machineNames = [null, ...remote].filter(m => showHidden || !hiddenMachines.has(m ?? ""));
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
@@ -383,6 +404,10 @@ export default class Spaces extends View {
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
+        .when(hiddenMachines.has(m ?? ""), el => el.opacity(0.5))
+        // k-spaces: right-click: Hide / Unhide this machine in this window.
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "k-spaces", kind: "popup", width: 220, height: 60,
+          props: { kMenu: "machine", target: { key: m ?? "", name: m ?? "This computer", hidden: hiddenMachines.has(m ?? "") } } }); })
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
         .on_click((_e, cx) => {
@@ -473,6 +498,7 @@ export default class Spaces extends View {
       .rounded(8)
       .when(on, (el) => el.bg(t.selected))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+      .when(this.isHidden(w), (el) => el.opacity(0.5))
       .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
       .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
         div().absolute().left(0).right(0).h(2).bg(t.accent)
@@ -502,7 +528,7 @@ export default class Spaces extends View {
         } else if (from === w.id) run("space.select", { id: w.id });
         cx.notify();
       })
-      .on_mouse_down("right", () => this.menu(w))
+      .on_mouse_down("right", () => this.menu(w, g))
       .child(
         h_flex()
           .gap(9)
@@ -560,6 +586,7 @@ export default class Spaces extends View {
         .border(1).border_color(marked ? t.border : t.chrome)
         // First press brings a tab back and leaves the keyboard with it; pressing the shown row again marks it for Del.
         .on_mouse_down("left", () => { if (shown) { this.cursor = c.id; this.handle.focus(); } else this.cursor = null; })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.tabMenu(w, c, lead); })
         .text_color(c.settled ? t.dim : shown ? t.foreground : t.muted)
         .on_click(() => {
           if (c.settled) run("tab.unsettle", { id: c.id });
@@ -615,6 +642,9 @@ export default class Spaces extends View {
     }
     if (changed) setShared("space.colors", kept);
     const list = this.grouped(t, collapsed);
+    const showHidden = shared("k-spaces.showHidden") === true;
+    const h = hidden();
+    const hiddenCount = h.machines.length + sp.filter(w => h.spaces.includes(w.id) && !h.machines.includes(w.machine ?? "")).length;
     // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
     const active = sp.find(p => p.active)?.id;
     if (active !== this.revealed || this.activeAt !== this.revealedAt) {
@@ -632,9 +662,21 @@ export default class Spaces extends View {
       })
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
-        .when(!collapsed, el => el.child("Spaces"))
+        .when(!collapsed, el => el.child(div().flex_1().child("Spaces")))
+        // k-spaces: how many are hidden in this window; click to show them (dimmed) or hide them again.
+        .when(!collapsed && hiddenCount > 0, el => el.child(h_flex().id("spaces-hidden").h(22).px(6).gap(5).rounded(5).items_center().flex_none()
+          .text_size(11).text_color(showHidden ? t.foreground : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+          .tooltip(showHidden ? "Hide them again" : "Show hidden spaces and machines (this window)")
+          .on_click(() => setShared("k-spaces.showHidden", !showHidden))
+          .child(svg(`mods/k-spaces/${showHidden ? "eye" : "eye-off"}.svg`).size(12))
+          .child(String(hiddenCount))))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+          .on_click(() => {
+            // k-spaces: with this computer hidden here, a new space goes to the first machine still shown.
+            const hm = hidden().machines;
+            const m = hm.includes("") && this.machines.find(k => k.state === "connected" && !hm.includes(k.name));
+            if (m) repoMenu(m.name); else run("space.new");
+          }).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })

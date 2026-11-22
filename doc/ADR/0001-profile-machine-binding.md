@@ -1,6 +1,6 @@
 # ADR 0001:Profile 綁定 machine
 
-- 狀態:Proposed(提案,之後再決定要不要做)
+- 狀態:Accepted(2026-11-22 實作,形式改成「每個視窗的隱藏清單」,見下方「決定」)
 - 日期:2026-11-21
 - 相關:`mods/k-settings/profiles.js`(Profiles 頁)、`mods/k-spaces`、`mods/k-agents`
 
@@ -55,3 +55,17 @@
 
 - 「空白 profile」選項:只建資料夾和捷徑,不複製。
 - 新 profile 的 k-* mod 改成 symlink 指到 repo,repo 更新時所有 profile 一起同步(目前推測 Windows 上 `Copy-Item` 會把 symlink 複製成實體檔案,未實測)。
+
+## 決定(2026-11-22)
+
+實作成**隱藏**而不是「綁定」:每個視窗(profile)各自記要藏哪些 machine / space,沒藏 = 全顯示。
+
+- 存在該 profile 的 `shared.json`:`k-spaces.hidden = { machines: ["" (This computer) | 名字], spaces: [id] }`,`k-spaces.showHidden` 是「顯示隱藏」開關。
+- 操作:機器標頭右鍵 → Hide / Unhide;Space 列右鍵 → Hide space / Unhide space。Spaces 標題右邊的眼睛圖示顯示藏了幾個,點一下把隱藏的半透明列出來(這時才能 Unhide),再點一下收起。
+- 待決的答案:
+  1. Agents 列表**不篩選**(先只藏 machine 和 space;要的話另案)。
+  2. picker **不 clone**。
+  3. 沒人綁的 machine 不會消失:預設全顯示,只有自己藏的才藏。
+  4. 新 profile 會複製目前視窗的 `shared.json`,所以**繼承**隱藏設定;不要就在新視窗 Unhide。
+- 新 Space:This computer 被藏時,Spaces 標題的「+」改開第一台沒被藏、已連線的機器的 repo 選單。
+- Space 的右鍵選單改用 k-spaces 自己的(`mods/k-spaces/menu.js`),內建的 Rename / worktree / Close 都保留,另加 Copy path 和 Hide。

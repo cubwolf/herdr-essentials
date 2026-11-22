@@ -50,4 +50,9 @@ if ! grep -q '"k-agents"' "$K"; then
   sed -i.bak -E 's/"mod": *"agents"/"mod": "k-agents"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-agents"' "$K" && echo "layout: k-main 換成 k-agents(右鍵 Copy address)" || echo "layout: 找不到 agents block,k-agents 沒換上" >&2
 fi
+# k-files(Markdown 檔顯示成排版後的樣子,可切回原始文字):換掉內建 files。重跑不會重複換。
+if ! grep -q '"k-files"' "$K"; then
+  sed -i.bak -E 's/"mod": *"files"/"mod": "k-files"/g' "$K" && rm -f "$K.bak"
+  grep -q '"k-files"' "$K" && echo "layout: k-main 換成 k-files(Markdown 預覽)" || echo "layout: 找不到 files block,k-files 沒換上" >&2
+fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
