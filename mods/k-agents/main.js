@@ -3,7 +3,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify, exec, machines, checking } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -79,9 +79,37 @@ function icon(p, size, color) {
   return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
 }
 
+// k-agents: what another machine calls this one (in its `hc machine ls`), so that the address of
+// a terminal here can be used from there: `t8` is copied as `laptop/t8`. The first connected
+// machine that knows this host decides; none does: the address stays `t8`.
+const SELF = { name: null, asked: 0 };
+function nameFor(host, list) {
+  const h = String(host ?? "").trim().toLowerCase();
+  const hit = h ? (list ?? []).find((m) => String(m?.host ?? "").trim().toLowerCase() === h) : null;
+  return hit?.name || null;
+}
+async function selfName() {
+  if (SELF.name || Date.now() - SELF.asked < 60000) return;
+  SELF.asked = Date.now();
+  try {
+    const host = (await exec("hostname", [], { timeout: 5000 })).stdout;
+    for (const m of machines()) {
+      if (!m.name) continue;
+      try {
+        const r = await exec("hc", ["machine", "ls", "--json"], { on: m.name, timeout: 15000 });
+        const name = nameFor(host, JSON.parse(r.stdout).machines);
+        if (name) { SELF.name = name; return; }
+      } catch {}
+    }
+  } catch {}
+}
+// The address to hand to someone else: another machine's keeps its name, one here gets SELF.name.
+const copied = (address) => (address.includes("/") || !SELF.name ? address : `${SELF.name}/${address}`);
+
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu || props()?.agentMenu) return;
+    if (!checking()) cx.spawn(() => selfName());
     this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
@@ -166,7 +194,7 @@ export default class Agents extends View {
 
   // k-agents: the right-click menu, opened as a popup of this mod with props { agentMenu: address }.
   agentMenu(t) {
-    const address = props().agentMenu;
+    const address = copied(props().agentMenu);
     return v_flex()
       .w_full()
       .p(5)
@@ -192,6 +220,7 @@ export default class Agents extends View {
   }
 
   openMenu(address) {
+    selfName(); // not known yet (the other machine was still connecting): ask again
     openOverlay({ mod: "k-agents", kind: "popup", width: 220, height: 50, props: { agentMenu: address } });
   }
 
