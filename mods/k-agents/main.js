@@ -316,7 +316,16 @@ export default class Agents extends View {
     // Read the pane snapshot once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
     const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
+    // Another mod can name a row and give it a tag:
+    // shared "k-agents.rows" = { <terminal address>: { name?, tag?, color? } } (color: a theme color name).
+    const given = shared("k-agents.rows");
+    const extra = (a) => {
+      const g = given && typeof given === "object" ? given[a.address] : null;
+      return g && typeof g === "object" ? g : null;
+    };
     const labels = new Map(list.map(a => {
+      const own = extra(a)?.name;
+      if (typeof own === "string" && own.trim()) return [a.address, own.trim()];
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
       return [a.address, tab ? title(many ? { ...tab, named: false } : tab, many ? a : leads.get(a.tab)) : (a.title || a.program?.name || "")];
@@ -370,8 +379,10 @@ export default class Agents extends View {
         .child(svg(`mods/workspace-chrome/${isPinned ? "pin-off" : "pin"}.svg`).size(13));
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
-      const full = byPriority || isPinned;
-      const name = full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
+      // A row another mod named reads as that name alone.
+      const named = labels.get(a.address) === extra(a)?.name?.trim?.();
+      const full = (byPriority || isPinned) && !named;
+      const name = named ? label(a) : full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -399,6 +410,10 @@ export default class Agents extends View {
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
           .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
+        .when(typeof extra(a)?.tag === "string" && Boolean(extra(a).tag), el => {
+          const c = t[extra(a).color] ?? t.dim;
+          return el.child(div().flex_none().px(5).h(17).rounded(5).bg(c + "26").text_size(10).font_semibold().text_color(c).flex().items_center().child(extra(a).tag));
+        })
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
