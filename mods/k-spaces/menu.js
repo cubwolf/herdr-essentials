@@ -1,13 +1,14 @@
 // k-spaces (herdr-essentials): the sidebar's right-click menus, in place of the shipped `menu` for
 // spaces, plus ones for a fold-out tab row and a machine header:
 //   tab:     Copy path, Copy address, Rename, New tab, Close
-//   space:   Rename, worktree items, Copy path, Hide / Unhide, Close
-//   machine: Hide / Unhide (its spaces go with it)
+//   space:   Rename, worktree items, Copy name, Copy path, MCP & Skills (inspect.js), Hide / Unhide, Close
+//   machine: Agents (inspect.js), Hide / Unhide (its spaces go with it)
 // Hidden spaces and machines are per window (shared.json lives in each profile's App home): see
 // hidden() in main.js. ↑/↓ move, Enter runs, Esc closes, as in the shipped menu.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, notify, shared, setShared } from "herdr";
+import { openAgentsInfo, openProjectInfo } from "./inspect.js";
 
 export const HIDDEN = "k-spaces.hidden";
 // { machines: ["" (this computer) | name], spaces: [id] }
@@ -46,7 +47,9 @@ function items(p) {
           { label: "Open worktree", icon: icon("git-branch"), act: wt("open", { width: 560, height: 480 }) },
         ] : []),
         ...(tg.git === "linked" ? [{ label: "Remove worktree", icon: icon("git-branch"), act: wt("remove", { width: 440, height: 260 }) }] : []),
-        ...(tg.path ? [{ label: "Copy path", icon: "mods/k-spaces/copy.svg", hint: tg.path, act: (cx) => copy(cx, tg.path, "path") }] : []),
+        ...(tg.name ? [{ label: "Copy name", icon: "mods/k-spaces/copy.svg", hint: tg.name, act: (cx) => copy(cx, tg.name, "name"), rule: true }] : []),
+        ...(tg.path ? [{ label: "Copy path", icon: "mods/k-spaces/copy.svg", hint: tg.path, act: (cx) => copy(cx, tg.path, "path"), rule: !tg.name }] : []),
+        { label: "MCP & Skills", icon: "mods/k-spaces/plug.svg", hint: "this folder", act: () => openProjectInfo(openOverlay, tg), rule: true },
         tg.hidden
           ? { label: "Unhide space", icon: "mods/k-spaces/eye.svg", act: () => setHidden("spaces", tg.id, false) }
           : { label: "Hide space", icon: "mods/k-spaces/eye-off.svg", hint: "this window", act: () => setHidden("spaces", tg.id, true) },
@@ -54,7 +57,7 @@ function items(p) {
       ];
     }
     case "machine":
-      return [tg.hidden
+      return [{ label: "Agents", icon: "mods/k-spaces/bot.svg", hint: "MCP, skills, status", act: () => openAgentsInfo(openOverlay, tg.key || null) }, tg.hidden
         ? { label: `Unhide ${tg.name}`, icon: "mods/k-spaces/eye.svg", act: () => setHidden("machines", tg.key, false) }
         : { label: `Hide ${tg.name}`, icon: "mods/k-spaces/eye-off.svg", hint: "this window", act: () => setHidden("machines", tg.key, true) }];
     default:

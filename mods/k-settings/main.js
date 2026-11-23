@@ -1,7 +1,7 @@
 // k-settings (herdr-essentials): the app's settings screen (frame/settings, herdr-app 0.1.16), plus
-// Profiles and Mods pages. frame/ is rewritten on every start, so this is a copy; the footer's
+// Keys, Profiles and Mods pages. frame/ is rewritten on every start, so this is a copy; the footer's
 // Settings row (k-chrome) opens it. Writes changes immediately; no Save step.
-// Profiles (profiles.js) and Mods (mods.js) are nested views: a mod can't import from another mod's
+// Keys (keys.js), Profiles (profiles.js) and Mods (mods.js) are nested views: a mod can't import from another mod's
 // folder, so they live here.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -9,6 +9,7 @@ import { v_flex, h_flex, Scrollbar, InputState, Input, Popup } from "gpui-base";
 import { hc, run, theme, themes, fonts, updates, telemetry, settings, layouts, shared, setShared, appHome, readTextFile, writeTextFile, playSound, props, closeOverlay, notify, window } from "herdr";
 import Profiles from "./profiles.js";
 import KMods from "./mods.js";
+import Keys from "./keys.js";
 
 const I = (name) => `mods/k-settings/${name}.svg`;
 
@@ -19,12 +20,13 @@ const SECTIONS = [
   { id: "alerts", title: "Alerts", icon: "bell" },
   { id: "updates", title: "Updates", icon: "refresh" },
   { id: "privacy", title: "Privacy", icon: "shield" },
-  // k-settings: windows with their own app home, and the mod manager.
+  // k-settings: every shortcut (keys.json), windows with their own app home, and the mod manager.
+  { id: "keys", title: "Keys", icon: "keyboard" },
   { id: "profiles", title: "Profiles", icon: "layers" },
   { id: "mods", title: "Mods", icon: "archive" },
 ];
 // k-settings: the pages that are nested views, made the first time they're shown.
-const NESTED = { profiles: Profiles, mods: KMods };
+const NESTED = { keys: Keys, profiles: Profiles, mods: KMods };
 
 const LOOKS = { main: "Herdr", terminals: "Terminals", win98: "Herdr 98" };
 const APPEARANCES = [

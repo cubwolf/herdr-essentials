@@ -12,6 +12,7 @@ import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, set
 import RepoMenu from "./repos.js";
 import AgentMenu from "./agents.js";
 import KMenu, { hidden } from "./menu.js";
+import { AgentsInfo, ProjectInfo } from "./inspect.js";
 
 // k-spaces: a machine's "+" opens a menu of its GitHub repos (repos.js); this mod again, as a popup.
 // k-spaces: a space row's "+" opens a new-tab menu for that space: terminal or agent, YOLO or not (agents.js).
@@ -76,6 +77,8 @@ export function tone(t, status) {
 export default class Spaces extends View {
   init(_props, cx) {
     if (props()?.kMenu) { this.repoView = cx.new(KMenu, {}); return; }
+    if (props()?.agentsInfo === true) { const m = props().machine; this.repoView = cx.new(AgentsInfo, { machine: typeof m === "string" && m ? m : null }); return; }
+    if (props()?.projectInfo === true) { const p = props(); this.repoView = cx.new(ProjectInfo, { machine: typeof p.machine === "string" && p.machine ? p.machine : null, path: p.path, name: p.name }); return; }
     if (props()?.agentMenu === true) { const m = props().machine; this.repoView = cx.new(AgentMenu, { space: props().space, machine: typeof m === "string" && m ? m : null }); return; }
     if (props()?.repoMenu === true) { const m = props().machine; this.repoView = cx.new(RepoMenu, { machine: typeof m === "string" && m ? m : null }); return; }
     try { this.tabsOpen = new Set(JSON.parse(localStorage.getItem("k.tabs.open") ?? "[]")); } catch { this.tabsOpen = new Set(); }
@@ -306,8 +309,8 @@ export default class Spaces extends View {
   // k-spaces: its own menu (menu.js): the shipped items plus Copy path and Hide.
   menu(w, g) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "k-spaces", kind: "popup", width: 240, height: 300, props: { kMenu: "space",
-      target: { id: w.id, path: place(w, panes()) || null, git: g ? (g.linked ? "linked" : "main") : null, hidden: hidden().spaces.includes(w.id) } } });
+    openOverlay({ mod: "k-spaces", kind: "popup", width: 260, height: 400, props: { kMenu: "space",
+      target: { id: w.id, name: w.name, machine: w.machine ?? null, path: place(w, panes()) || null, git: g ? (g.linked ? "linked" : "main") : null, hidden: hidden().spaces.includes(w.id) } } });
   }
 
   // k-spaces: a fold-out tab row's menu: Copy path (its first terminal's folder), Copy address, Rename, New tab, Close.
@@ -405,8 +408,8 @@ export default class Spaces extends View {
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(26).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .when(hiddenMachines.has(m ?? ""), el => el.opacity(0.5))
-        // k-spaces: right-click: Hide / Unhide this machine in this window.
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "k-spaces", kind: "popup", width: 220, height: 60,
+        // k-spaces: right-click: Agents (what's installed there), Hide / Unhide this machine in this window.
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "k-spaces", kind: "popup", width: 260, height: 100,
           props: { kMenu: "machine", target: { key: m ?? "", name: m ?? "This computer", hidden: hiddenMachines.has(m ?? "") } } }); })
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
