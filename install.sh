@@ -23,6 +23,12 @@ for m in "$HERE"/mods/*/; do
   if [ "$MODE" = link ]; then ln -s "$src" "$dst"; echo "mod: $name -> $src"
   else mkdir -p "$dst"; cp -r "$src/." "$dst/"; echo "mod: $name (copy)"; fi
 done
+# k-chat 的主持程式(tools/k-chat/runner.mjs):mod 從 App home 的 tools/k-chat 找它。跟 mod 一樣 link 或複製。
+mkdir -p "$H/tools"; dst=$H/tools/k-chat
+if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi
+if [ "$MODE" = link ]; then ln -s "$HERE/tools/k-chat" "$dst"; echo "tool: k-chat -> $HERE/tools/k-chat"
+else mkdir -p "$dst"; cp -r "$HERE/tools/k-chat/." "$dst/"; echo "tool: k-chat (copy)"; fi
+command -v node >/dev/null || echo "tool: 找不到 node(k-chat 的主持程式要 Node 18+)" >&2
 # 舊版的 k-profiles、k-mods 已併進 k-settings(Settings 裡的 Profiles、Mods 頁):拿掉留在 App home 的舊 link / 複本。
 for old in k-profiles k-mods; do
   if [ -L "$H/mods/$old" ] || [ -d "$H/mods/$old" ]; then rm -rf "$H/mods/$old"; echo "mod: $old 已併進 k-settings,移除舊的"; fi

@@ -50,6 +50,8 @@ function items(p) {
         ...(tg.name ? [{ label: "Copy name", icon: "mods/k-spaces/copy.svg", hint: tg.name, act: (cx) => copy(cx, tg.name, "name"), rule: true }] : []),
         ...(tg.path ? [{ label: "Copy path", icon: "mods/k-spaces/copy.svg", hint: tg.path, act: (cx) => copy(cx, tg.path, "path"), rule: !tg.name }] : []),
         { label: "MCP & Skills", icon: "mods/k-spaces/plug.svg", hint: "this folder", act: () => openProjectInfo(openOverlay, tg), rule: true },
+        // k-chat: a discussion among agents, kept in this Space's doc/chat/ (this Space is the main one).
+        { label: "Discussion", icon: "mods/k-spaces/bot.svg", hint: "k-chat", act: () => openOverlay({ mod: "k-chat", kind: "window", key: "k-chat", width: 780, height: 0.86, props: { space: tg.id } }) },
         tg.hidden
           ? { label: "Unhide space", icon: "mods/k-spaces/eye.svg", act: () => setHidden("spaces", tg.id, false) }
           : { label: "Hide space", icon: "mods/k-spaces/eye-off.svg", hint: "this window", act: () => setHidden("spaces", tg.id, true) },
