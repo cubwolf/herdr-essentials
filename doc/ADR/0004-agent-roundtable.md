@@ -21,7 +21,7 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 |---|---|---|
 | 主持程式(runner) | 輪流:問主席 → 叫 agent 發言 → 寫入對話紀錄;收 Owner 的訊息 | 一支腳本,用 `hc run --keep` 跑在 herdr-core 裡:視窗關掉它也照跑,而且看得到、關得掉 |
 | mod `k-chat`(畫面) | 顯示對話(監看 `doc/chat/<主題>.md`)、邀請 agent、Owner 發言(寫進收件匣檔) | Herdr App mod |
-| skill / plugin | 讓 Claude Code session 也能開討論、邀人;主席的規則 | my-claude-plugins |
+| skill / plugin | 讓 Claude Code session 也能開討論、邀人;主席的規則 | 本 repo `tools/k-chat/`(原本寫 my-claude-plugins,2026-11-24 改:之後要公開) |
 
 為什麼不全放在 mod 裡:
 - 視窗一關、版面一切,mod 就結束,討論會斷;
@@ -91,11 +91,17 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 - **多了幾個 Owner 指令**:`/end` 請主席現在收尾;主席可以把 next 填 `owner` 來等 Owner 回話;結束後 Owner 再發言會重新開始(至少再給 6 輪)。
 - **唯讀怎麼做**:Claude Code 用 `--tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools 同上 --strict-mcp-config`(連 MCP 都不載,免得成員用 MCP 工具寫東西);YOLO 那一輪改成 `--dangerously-skip-permissions`、不限工具。主席自己 `--tools ""`,什麼工具都沒有。
 
+## skill / plugin 放哪(2026-11-24,Owner)
+
+- 這個之後要公開,**不放 my-claude-plugins**(私人的);放本 repo。
+- plugin 就是 `tools/k-chat/` 本身:`.claude-plugin/plugin.json` + `skills/k-chat/SKILL.md` + `commands/`(`new` / `say` / `invite` / `status`),跟 `runner.mjs` 同一個資料夾,所以裝起來是自足的(`${CLAUDE_PLUGIN_ROOT}/runner.mjs`)。repo 根目錄的 `.claude-plugin/marketplace.json` 把這個 repo 當 marketplace。
+- 從 Claude Code 啟動主持程式用 `runner.mjs start`:`hc run --bg --keep --no-parent`(旗標都在 `--` 前、子程序拿掉 `TMUX` / `CLAUDECODE`),再把那個 terminal 寫進 Herdr App 的排版(core 文件 `herdr-app`)。
+
 ## 還沒做 / 已知限制
 
-- skill / plugin(讓 Claude Code session 開討論、邀人)還沒做;現在只有 mod 視窗與 `runner.mjs` 指令。
 - 帶入 tab 的對話(`--resume <tab 的 session> --fork-session`):主持程式支援(成員 JSON 的 `fork` 欄),mod 的邀請畫面還沒有 —— mod 拿不到某個 tab 的 session 編號。
 - Codex 成員:參數照 `codex exec` 文件寫了,這台沒裝 Codex,沒實測。
 - 主 Space 要在跑 Herdr App 的那台機器上(mod 只能在本機寫檔、起程式);成員可以在別台。
 - 別台機器的成員走 `hc exec`,一輪最多 10 分鐘(本機 15 分鐘、YOLO 30 分鐘)。
+- plugin 的指令(`/k-chat:new` 等)還沒在真的 Claude Code session 裡裝起來跑過;`claude plugin validate` 過了,`start` 在測試環境的 core 實跑過。
 - 「開成 Tide 卡」只用假的 `task` 測過(`tests/k-chat.test.js`),沒有對真的 Tide 開過卡。

@@ -176,6 +176,39 @@ test("輪數上限、關掉 YOLO、中途邀請、失敗會記下來", async () 
   } finally { await t.stop(); }
 });
 
+test("start:在 herdr-core 開自己的 terminal(hc run --keep),並寫進 Herdr App 排版;list 列得出來", async () => {
+  const t = setup([]);
+  try {
+    const env = { ...t.env, TMUX: "/tmp/x,1,0", CLAUDECODE: "1" };
+    const r = spawnSync("node", [RUNNER, "start", t.state], { env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.deepEqual([out.started, out.address, out.in_app_layout], [true, "t99", true]);
+    assert.match(out.terminal, /^kchat-[0-9a-f]{8}$/);
+    const call = JSON.parse(fs.readFileSync(path.join(t.dirs.fake, "hc-run.jsonl"), "utf8").trim());
+    // hc 的旗標都在 -- 前面,後面才是程式
+    for (const f of ["--bg", "--keep", "--no-parent", "--name", "--cwd"]) assert.ok(call.flags.includes(f), f);
+    assert.equal(call.flags[call.flags.indexOf("--cwd") + 1], t.dirs.main);
+    assert.deepEqual(call.argv.slice(1), [RUNNER, "run", t.state].map((x, i) => (i === 0 ? fs.realpathSync(x) : x)));
+    assert.deepEqual(call.env, { TMUX: null, CLAUDECODE: null }, "子程序不帶這個 session 的 TMUX / CLAUDECODE");
+    const doc = JSON.parse(fs.readFileSync(path.join(t.dirs.fake, "doc.json"), "utf8"));
+    assert.equal(doc.version, 8);
+    assert.equal(doc.value.other, "kept", "排版文件其他欄位原樣留著");
+    const [sp] = doc.value.spaces;
+    assert.equal(sp.folder, t.dirs.main);
+    assert.equal(sp.tabs[0].root.children[0].content.terminal, "t99");
+    assert.equal(sp.tabs[0].name, "chat: 方案 討論");
+    // 已經在排版裡就不重複加
+    const again = JSON.parse(spawnSync("node", [RUNNER, "start", t.state], { env, encoding: "utf8" }).stdout);
+    assert.equal(again.in_app_layout, false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(t.dirs.fake, "doc.json"), "utf8")).value.spaces[0].tabs.length, 1);
+
+    const list = JSON.parse(t.cli("list", "--repo", t.dirs.main).stdout);
+    assert.deepEqual(list.map((x) => [x.title, x.status, x.round, x.members]), [["方案 討論", "running", 0, ["alpha", "beta"]]]);
+    assert.equal(list[0].path, t.state);
+  } finally { await t.stop(); }
+});
+
 test("lib:Owner 的話、主席的回答、紀錄格式", () => {
   const names = ["alpha", "beta"];
   assert.deepEqual(L.parseSay("/stop", names), { text: "/stop", stop: true, end: false, mentions: [] });

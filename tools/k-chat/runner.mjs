@@ -6,7 +6,8 @@
 //   runner.mjs new --repo DIR --topic NAME --members JSON [--title T] [--space S] [--say TEXT]
 //                  [--max-rounds N] [--chair-model M] [--no-yolo]     make the files, print the state path
 //   runner.mjs list --repo DIR         that repo's discussions, as JSON
-//   runner.mjs run <state.json>        host it (picks up where it stopped); meant for `hc run --keep`
+//   runner.mjs start <state.json>      host it in a herdr-core terminal of its own (hc run --keep), shown in the Herdr App
+//   runner.mjs run <state.json>        host it here, in this terminal (picks up where it stopped)
 //   runner.mjs say <state.json> TEXT   the Owner speaks (/stop, /end, @member)
 //   runner.mjs invite <state.json> JSON   add a member: { name?, space, machine?, cwd, agent?, fork? }
 //   runner.mjs set <state.json> allow_yolo=false|max_rounds=20|chair_model=haiku
@@ -18,6 +19,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import * as L from "./lib.mjs";
 
@@ -212,6 +215,27 @@ function spawnTask(args, input, who) {
   return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? String(r.error ?? "") };
 }
 
+// Puts a core terminal in the Herdr App's layout (the core document "herdr-app": spaces → tabs),
+// as a tab of the space whose folder it is, or of a new space. False when it is already there.
+function place(address, folder, tabName) {
+  const rpc = (method, params) => {
+    const r = spawnSync(HC, ["connect"], { input: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) + "\n", env: childEnv(), encoding: "utf8", timeout: 15000 });
+    const res = JSON.parse((r.stdout ?? "").split("\n")[0] || "null");
+    if (!res || res.error) throw new Error(`${method}: ${JSON.stringify(res?.error ?? (r.stderr || "沒有回應")).slice(0, 200)}`);
+    return res.result;
+  };
+  const id = (prefix) => prefix + crypto.randomBytes(16).toString("hex");
+  const cur = rpc("doc.get", { name: "herdr-app" });
+  const value = cur.value ?? {}, spaces = [...(value.spaces ?? [])];
+  if (JSON.stringify(spaces).includes(`"terminal":"${address}"`)) return false;
+  let sp = spaces.find((x) => x.folder === folder);
+  if (!sp) { sp = { id: id("sp"), name: path.basename(folder) || folder, folder, tabs: [] }; spaces.push(sp); }
+  const tab = id("tb");
+  sp.tabs = [...(sp.tabs ?? []), { id: tab, name: tabName, root: { id: tab, type: "row", children: [{ id: id("pd"), type: "block", content: { terminal: address } }] } }];
+  rpc("doc.set", { name: "herdr-app", value: { ...value, spaces }, version: cur.version });
+  return true;
+}
+
 function flags(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i += 1) {
@@ -254,6 +278,22 @@ function main() {
       console.log(JSON.stringify(out));
       break;
     }
+    case "start": {
+      // Hosts it in a herdr-core terminal of its own (it outlives this shell and the App's
+      // windows), and puts that terminal in the Herdr App's layout so it can be seen and closed.
+      need();
+      const s = L.load(statePath);
+      const live = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      if (s.runner?.pid && s.runner.host === os.hostname() && live(s.runner.pid) && Date.now() - (s.runner.at ?? 0) < 30000) { console.log(JSON.stringify({ started: false, reason: "已經有主持程式在跑", pid: s.runner.pid })); break; }
+      const name = `kchat-${crypto.createHash("sha1").update(statePath).digest("hex").slice(0, 8)}`;
+      const r = spawnSync(HC, ["run", "--bg", "--keep", "--no-parent", "--json", "--name", name, "--cwd", s.repo, "--", process.execPath, fileURLToPath(import.meta.url), "run", statePath], { env: childEnv(), encoding: "utf8" });
+      if (r.status !== 0) throw new Error(`hc run 失敗:${(r.stderr || r.stdout || String(r.error ?? "")).trim().split("\n").pop()}`);
+      let address = null; try { address = JSON.parse(r.stdout.trim().split("\n").pop()).address ?? null; } catch {}
+      let placed = false, warn = null;
+      try { placed = address ? place(address, s.repo, `chat: ${s.title}`.slice(0, 40)) : false; } catch (e) { warn = `沒寫進 Herdr App 排版(${e.message});terminal 還是在跑:hc attach ${name}`; }
+      console.log(JSON.stringify({ started: true, terminal: name, address, in_app_layout: placed, ...(warn ? { warning: warn } : {}) }));
+      break;
+    }
     case "run": need(); host(statePath); break;
     case "say": L.drop(need().inbox, { type: "say", text: o._.slice(1).join(" ") }); break;
     case "invite": L.drop(need().inbox, { type: "invite", member: JSON.parse(o._[1]) }); break;
@@ -272,7 +312,7 @@ function main() {
     case "card": L.drop(need().inbox, { type: "card", todos: String(o._[1] ?? "").split(",").filter(Boolean).map(Number) }); break;
     case "quit": L.drop(need().inbox, { type: "quit" }); break;
     default:
-      console.error("用法:runner.mjs new|run|say|invite|set|card|quit …(見檔頭)");
+      console.error("用法:runner.mjs new|list|start|run|say|invite|set|card|quit …(見檔頭)");
       process.exit(2);
   }
 }

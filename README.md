@@ -15,7 +15,7 @@
 | `k-settings` 的 Mods(原 `k-mods`) | Mod 管理頁,長得像 VS Code 的擴充功能頁:Settings → Mods。左邊搜尋框 + Installed / Marketplace 兩個分頁,右邊是選到的 mod 的詳細資料和按鈕。Installed:自己的 mod 在上(來源 `owner/repo @sha7`、`local` 或 `link`,有新版會標 update available),Herdr 內建的收在「Built-in」群組、不能刪也不能停用;k-settings 自己也不能。Marketplace:GitHub topic `herdr-mod` 的 repo(有 `gh` 就用登入身分查,沒有就匿名),搜尋、Load more 分頁。安裝 / 更新前先在右邊顯示審查:會複製什麼、程式碼會不會執行程式 / 連網 / 讀寫檔案、加哪些快捷鍵,同名就擋下;按 Confirm 才裝。Disable 把 mod 搬到 `mods-disabled/`,Enable 搬回來;被 layout 用到的(例如 k-main 的 k-tabs)會拒絕並說是哪個 layout。Windows 走 PowerShell(未在 Windows 實測)。改自 [jacksonpires/herdr-app-mod-manager](https://github.com/jacksonpires/herdr-app-mod-manager)(MIT,見 `THIRD-PARTY-NOTICES.md`) | Linux 測試環境驗過 |
 | `k-files` | 內建 `files`(右側 Files 面板)的 clone:`.md` / `.markdown` 檔顯示成排版後的樣子(標題、清單、表格、程式碼、連結),右上「Source」切回原始文字、「Preview」切回來 | Linux 測試環境驗過 |
 | `k-pick` | 給 agent 指位置用(像 web 的 DevPick):左上角 Herdr 標題列的準心圖示(`k-chrome`,在搜尋左邊;或 `herdr-app do mod.open --name k-pick`)開一層透明覆蓋,滑鼠框出游標下的版面區塊,點一下複製定位器(layout / block / mod / 檔案 / 座標)加一張標了紅點的視窗截圖(`.k-pick/` 在 App home),貼給 agent 就知道是哪裡。對話框也認得(從 `herdr-app status` 知道開了哪個,定位器變成 `overlay=… | kind=dialog | mod=…`;k-settings 會回報自己的大小所以框得準,其他對話框照 mod.json 的大小估,估不出位置的會註明並附上底下的區塊)。**對話框開著時要用快捷鍵開 k-pick**:點標題列的準心會先把對話框關掉。快捷鍵 `ctrl-f12`:`./install.sh` 會幫你加進 `keys.json` 的 `global`(已有 `ctrl-f12` 綁別的就不動、只提醒;改過 `keys.json` 後 Herdr 升級的新預設快捷鍵就不會自動加入)。點一下或按 Space 都能選 | Windows 驗過 |
-| `k-chat` | 多 agent 討論群(主席制,設計見 `doc/ADR/0004-agent-roundtable.md`):Space 列右鍵 →「Discussion」(或 `herdr-app do mod.open --name k-chat`,以目前顯示的 Space 為主)。New discussion:填主題與開場、勾要邀的 Space(別台機器的也行)、輪數上限、要不要允許主席開 YOLO。每一輪由主席(另一個 `claude -p`,預設 Sonnet)決定誰發言;成員是各自資料夾裡的無頭 `claude -p`,每人接續自己的 session,預設只能讀檔 / 搜尋 / 查網頁。主席授權某個成員某一輪動手時,紀錄會有一行 `🔓 主席授權 <成員> YOLO:<理由>`,那一輪結束就收回。Owner 在下面的框發言會插隊;`@成員` 讓他下一個發言(不經主席)、`/stop`(或 Stop)中止現在這一輪、`/end`(或 Wrap up)請主席寫結論。結論的待辦列在下方,勾選後按「開成 Tide 卡」才開卡。紀錄存在主 Space 的 `doc/chat/<主題>.md`(porthole 的 `#chat` 讀得懂),狀態在 `<主題>.json`。輪流的是 `tools/k-chat/runner.mjs`(Node 18+),跑在主 Space 的一個 tab 裡:關掉討論視窗或整個 Herdr App 都照跑,重開接得上;關掉那個 tab 才會停(視窗會出現 Resume)。主 Space 要在這台機器上。指令列也能用:`node tools/k-chat/runner.mjs`(`new` / `run` / `say` / `invite` / `set` / `card` / `quit`,見檔頭) | Linux 測試環境驗過;別台成員(laptop)用指令列驗過;Codex 成員、真的開 Tide 卡還沒實測 |
+| `k-chat` | 多 agent 討論群(主席制,設計見 `doc/ADR/0004-agent-roundtable.md`):Space 列右鍵 →「Discussion」(或 `herdr-app do mod.open --name k-chat`,以目前顯示的 Space 為主)。New discussion:填主題與開場、勾要邀的 Space(別台機器的也行)、輪數上限、要不要允許主席開 YOLO。每一輪由主席(另一個 `claude -p`,預設 Sonnet)決定誰發言;成員是各自資料夾裡的無頭 `claude -p`,每人接續自己的 session,預設只能讀檔 / 搜尋 / 查網頁。主席授權某個成員某一輪動手時,紀錄會有一行 `🔓 主席授權 <成員> YOLO:<理由>`,那一輪結束就收回。Owner 在下面的框發言會插隊;`@成員` 讓他下一個發言(不經主席)、`/stop`(或 Stop)中止現在這一輪、`/end`(或 Wrap up)請主席寫結論。結論的待辦列在下方,勾選後按「開成 Tide 卡」才開卡。紀錄存在主 Space 的 `doc/chat/<主題>.md`(porthole 的 `#chat` 讀得懂),狀態在 `<主題>.json`。輪流的是 `tools/k-chat/runner.mjs`(Node 18+),跑在主 Space 的一個 tab 裡:關掉討論視窗或整個 Herdr App 都照跑,重開接得上;關掉那個 tab 才會停(視窗會出現 Resume)。主 Space 要在這台機器上。指令列也能用:`node tools/k-chat/runner.mjs`(`new` / `start` / `run` / `list` / `say` / `invite` / `set` / `card` / `quit`,見檔頭)。Claude Code 的 session 也能開討論:`tools/k-chat` 同時是一個 plugin(見下方「k-chat plugin」) | Linux 測試環境驗過;別台成員(laptop)用指令列驗過;Codex 成員、真的開 Tide 卡還沒實測 |
 
 搜過沒有現成可用的:`Hypercubed/herdr-app-focus-window` 能從 Space 選單開新視窗,但每次都是新的 home,而且沒有授權條款;`GiorgiTarsaidze/herdr-profiles` 是給終端機版 herdr 的。
 
@@ -38,6 +38,23 @@ herdr-app do layout.switch --name k-main      # 換過去;回原樣:--name main(
 
 herdr-app 本身沒有同步 mod 的功能,每台機器都要 clone + `./install.sh` 一次。
 內建 mod / layout 每次啟動會被 Herdr 覆蓋,所以一律用 `k-` 前綴的複本。以 herdr-app 0.1.16 的內建版為底。
+
+## k-chat plugin(Claude Code)
+
+讓 Claude Code 的 session 開討論、邀人、替你發言。plugin 就是 `tools/k-chat/`(主持程式 + skill + 指令),這個 repo 同時是它的 marketplace:
+
+```
+/plugin install k-chat --marketplace kirinchen/herdr-essentials
+```
+
+| 指令 | 做什麼 |
+|---|---|
+| `/k-chat:new <主題> —— <開場> [成員…]` | 建檔、邀成員,在 herdr-core 開一個 terminal 主持(`hc run --keep`),並寫進 Herdr App 的排版 |
+| `/k-chat:say [主題] <話>` | 替你發言(`@成員`、`/stop`、`/end` 一樣有效);主持程式沒在跑就接著開 |
+| `/k-chat:invite [主題] <repo 或資料夾>` | 中途加人(別台機器、帶入某個 session 的對話) |
+| `/k-chat:status [主題]` | 哪幾場、第幾輪、誰在發言、最後說了什麼(唯讀) |
+
+需要 Node 18+ 與 `claude`;用 `start`、別台成員要有 herdr-core(`hc`)。沒有 Herdr App 也能用,紀錄一樣在 `doc/chat/`。
 
 ## 開發
 
