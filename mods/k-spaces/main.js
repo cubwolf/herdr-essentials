@@ -525,7 +525,11 @@ export default class Spaces extends View {
         if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
-        } else if (from === w.id) run("space.select", { id: w.id });
+        } else if (from === w.id) {
+          // As VS Code's explorer: a click on the row selects the space and folds its tabs in or out.
+          run("space.select", { id: w.id });
+          this.toggleTabs(w);
+        }
         cx.notify();
       })
       .on_mouse_down("right", () => this.menu(w, g))
@@ -533,12 +537,14 @@ export default class Spaces extends View {
         h_flex()
           .gap(9)
           .items_center()
-          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
+          .when(Boolean(tree), el => el.pl(22))
+          .child(this.tabsChevron(w, t))
+          .when(Boolean(tree), el => el.child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
-          .child(this.addTab(w, t))
-          .child(this.tabsToggle(w, t)),
+          .child(this.awayCount(w, t))
+          .child(this.addTab(w, t)),
       );
   }
 
@@ -552,22 +558,22 @@ export default class Spaces extends View {
       .child(svg("mods/workspace-chrome/plus.svg").size(11));
   }
 
-  // k-spaces: the fold-out arrow after a space's name; a count of put-away tabs beside it.
-  tabsToggle(w, t) {
-    const open = this.tabsOpen.has(w.id);
+  // k-spaces: fold a space's tabs in or out (a click on its row, as in VS Code); remembered.
+  toggleTabs(w) {
+    this.tabsOpen.has(w.id) ? this.tabsOpen.delete(w.id) : this.tabsOpen.add(w.id);
+    localStorage.setItem("k.tabs.open", JSON.stringify([...this.tabsOpen]));
+  }
+
+  // k-spaces: VS Code's fold arrow before a space's name.
+  tabsChevron(w, t) {
+    return svg(`mods/workspace-chrome/chevron-${this.tabsOpen.has(w.id) ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim);
+  }
+
+  // k-spaces: how many of its tabs are put away, while they're folded in.
+  awayCount(w, t) {
     const away = (w.tabs ?? []).filter(c => c.settled).length;
-    return h_flex().id(`tabs-toggle-${w.id}`).flex_none().gap(3).px(3).h(20).rounded(4).items_center()
-      .text_size(11).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
-      .tooltip(open ? "Hide tabs" : away ? `Show tabs (${away} put away)` : "Show tabs")
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click((_e, cx) => {
-        cx.stop_propagation();
-        open ? this.tabsOpen.delete(w.id) : this.tabsOpen.add(w.id);
-        localStorage.setItem("k.tabs.open", JSON.stringify([...this.tabsOpen]));
-        cx.notify();
-      })
-      .when(away > 0, el => el.child(div().child(String(away))))
-      .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11));
+    if (!away || this.tabsOpen.has(w.id)) return div();
+    return div().id(`tabs-away-${w.id}`).flex_none().px(3).text_size(11).text_color(t.dim).tooltip(`${away} put away`).child(String(away));
   }
 
   // k-spaces: the space row, then (when folded out) every tab in it, settled ones dimmed.
@@ -580,7 +586,7 @@ export default class Spaces extends View {
       const name = c.named ? c.name : (lead?.program?.name ?? c.name);
       const shown = w.active && c.active;
       const marked = this.cursor === c.id;
-      return h_flex().id(`tab-${c.id}`).h(24).flex_none().pl(35).pr(4).gap(6).items_center().rounded(6).text_size(12)
+      return h_flex().id(`tab-${c.id}`).h(24).flex_none().pl(55).pr(4).gap(6).items_center().rounded(6).text_size(12)
         .when(shown, el => el.bg(t.selected))
         .when(!shown, el => el.hover(s => s.bg(t.hover)))
         .border(1).border_color(marked ? t.border : t.chrome)

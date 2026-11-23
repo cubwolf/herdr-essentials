@@ -55,4 +55,15 @@ if ! grep -q '"k-files"' "$K"; then
   sed -i.bak -E 's/"mod": *"files"/"mod": "k-files"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-files"' "$K" && echo "layout: k-main 換成 k-files(Markdown 預覽)" || echo "layout: 找不到 files block,k-files 沒換上" >&2
 fi
+# k-pick 的快捷鍵 ctrl-f12(對話框開著時只能用快捷鍵開,點標題列的準心會先關掉對話框)。已綁別的就不動。
+KJ=$H/keys.json
+if [ -e "$KJ" ]; then
+  if grep -q '"ctrl-f12": *"mod.open:k-pick"' "$KJ"; then :
+  elif grep -q '"ctrl-f12"' "$KJ"; then echo "keys: ctrl-f12 已綁別的,k-pick 沒加快捷鍵(自己在 keys.json 改)" >&2
+  elif grep -qE '"global": *\{[[:space:]]*$' "$KJ"; then
+    sed -i.bak -E 's/("global": *\{)/\1\n    "ctrl-f12": "mod.open:k-pick",/' "$KJ" && rm -f "$KJ.bak"; echo "keys: ctrl-f12 開 k-pick"
+  else echo "keys: keys.json 的 global 格式認不得,自己加 \"ctrl-f12\": \"mod.open:k-pick\"" >&2; fi
+else
+  echo "keys: 還沒有 keys.json(用內建預設),k-pick 沒加快捷鍵:先在 Settings 改一個快捷鍵讓它產生再重跑" >&2
+fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done
