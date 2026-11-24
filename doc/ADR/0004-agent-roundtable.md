@@ -86,7 +86,7 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 
 - **紀錄的標題**:成員是 `## 🤖 Assistant · <成員>@<space> · <時間>`,主席是 `## 🤖 Assistant · 🪑 主席 · <時間>`。porthole 的 `#chat` 只認 `## 🧑 Human` 和 `## 🤖 Assistant` 開頭的標題,照原本寫的 `## 🤖 <成員>@<space>` / `## 🪑 主席` 會切不出訊息。成員回答裡自己的 `#` / `##` 標題會降成 `###`,免得被當成新訊息。
 - **Owner 的訊息與設定都走收件匣**:`doc/chat/<主題>.inbox/`,一則一個小 JSON 檔(發言、邀請、設定、開卡、離開)。只有主持程式寫 `.md` 和 `.json`,視窗關掉重開、或同時開兩個視窗都不會寫壞。
-- **從 mod 啟動主持程式**用 `tab.new`(在主 Space 開一個 tab 跑 `node runner.mjs run <state>`),不是 `hc run --keep`:一樣是 herdr-core 裡的 terminal、視窗關了照跑,而且直接就在 App 的排版裡,不用另外寫排版。從指令列 / skill 啟動才用 `hc run --keep`。關掉那個 tab = 主持程式結束;視窗會顯示「主持程式沒在跑」和 Resume。
+- **從 mod 啟動主持程式**也是 `hc run --keep`(`runner.mjs start --no-layout`),但**不寫進排版**:每場討論在主 Space 有自己的 tab「💬 主題」(mod 當它唯一的 pane,`props.state` 指到狀態檔),側欄那一列點下去就是對話畫面。主持程式要停按 Stop host,沒在跑時發言或按 Resume 會再起來。(2026-11-24 改:第一版用 `tab.new` 開一個跑主持程式的 terminal tab,Kirin 試用時點側欄的「chat: …」只看到一串 log,回不到對話。)
 - **mod 不能列資料夾**(`fs/promises` 只能讀授權過的位置),討論清單改問主持程式:`runner.mjs list --repo <dir>`。
 - **多了幾個 Owner 指令**:`/end` 請主席現在收尾;主席可以把 next 填 `owner` 來等 Owner 回話;結束後 Owner 再發言會重新開始(至少再給 6 輪)。
 - **唯讀怎麼做**:Claude Code 用 `--tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools 同上 --strict-mcp-config`(連 MCP 都不載,免得成員用 MCP 工具寫東西);YOLO 那一輪改成 `--dangerously-skip-permissions`、不限工具。主席自己 `--tools ""`,什麼工具都沒有。

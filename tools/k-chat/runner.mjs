@@ -6,7 +6,8 @@
 //   runner.mjs new --repo DIR --topic NAME --members JSON [--title T] [--space S] [--say TEXT]
 //                  [--max-rounds N] [--chair-model M] [--no-yolo]     make the files, print the state path
 //   runner.mjs list --repo DIR         that repo's discussions, as JSON
-//   runner.mjs start <state.json>      host it in a herdr-core terminal of its own (hc run --keep), shown in the Herdr App
+//   runner.mjs start <state.json> [--no-layout]   host it in a herdr-core terminal of its own (hc run --keep), shown in
+//                                      the Herdr App's sidebar unless --no-layout (the k-chat mod: its tab is the discussion)
 //   runner.mjs run <state.json>        host it here, in this terminal (picks up where it stopped)
 //   runner.mjs say <state.json> TEXT   the Owner speaks (/stop, /end, @member)
 //   runner.mjs invite <state.json> JSON   add a member: { name?, space, machine?, cwd, agent?, fork? }
@@ -46,7 +47,7 @@ function run({ bin, args, cwd, machine, input, timeout, stop }) {
     : [real, args];
   return new Promise((resolve) => {
     let out = "", err = "", stopped = false, over = false;
-    const child = spawn(cmd, argv, { cwd: machine ? undefined : cwd, env: childEnv(), detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(cmd, argv, { cwd: machine ? undefined : cwd, env: childEnv(), detached: process.platform !== "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const end = () => { try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} } };
     const timer = setInterval(() => { if (stop?.()) { stopped = true; end(); } }, TICK);
     const limit = setTimeout(() => { over = true; end(); }, timeout);
@@ -241,6 +242,7 @@ function flags(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--no-yolo") o.noYolo = true;
+    else if (a === "--no-layout") o.noLayout = true;
     else if (a.startsWith("--")) { o[a.slice(2)] = argv[i + 1]; i += 1; }
     else o._.push(a);
   }
@@ -286,11 +288,15 @@ function main() {
       const live = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
       if (s.runner?.pid && s.runner.host === os.hostname() && live(s.runner.pid) && Date.now() - (s.runner.at ?? 0) < 30000) { console.log(JSON.stringify({ started: false, reason: "已經有主持程式在跑", pid: s.runner.pid })); break; }
       const name = `kchat-${crypto.createHash("sha1").update(statePath).digest("hex").slice(0, 8)}`;
+      // The one from last time (ended, or the shell --keep left in its place) still holds the name.
+      spawnSync(HC, ["kill", name], { env: childEnv(), encoding: "utf8" });
+      spawnSync(HC, ["rm", name], { env: childEnv(), encoding: "utf8" });
       const r = spawnSync(HC, ["run", "--bg", "--keep", "--no-parent", "--json", "--name", name, "--cwd", s.repo, "--", process.execPath, fileURLToPath(import.meta.url), "run", statePath], { env: childEnv(), encoding: "utf8" });
       if (r.status !== 0) throw new Error(`hc run 失敗:${(r.stderr || r.stdout || String(r.error ?? "")).trim().split("\n").pop()}`);
       let address = null; try { address = JSON.parse(r.stdout.trim().split("\n").pop()).address ?? null; } catch {}
       let placed = false, warn = null;
-      try { placed = address ? place(address, s.repo, `chat: ${s.title}`.slice(0, 40)) : false; } catch (e) { warn = `沒寫進 Herdr App 排版(${e.message});terminal 還是在跑:hc attach ${name}`; }
+      // --no-layout: the Herdr App window shows the discussion itself (the mod's tab); the host stays out of the sidebar.
+      try { placed = address && !o.noLayout ? place(address, s.repo, `chat: ${s.title}`.slice(0, 40)) : false; } catch (e) { warn = `沒寫進 Herdr App 排版(${e.message});terminal 還是在跑:hc attach ${name}`; }
       console.log(JSON.stringify({ started: true, terminal: name, address, in_app_layout: placed, ...(warn ? { warning: warn } : {}) }));
       break;
     }
