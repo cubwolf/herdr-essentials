@@ -48,6 +48,9 @@ k-float --version
 - 每 0.2 秒看一次 `windows/`。
 - 沒有任何視窗滿 30 秒就自己結束。所以每次寫完 spec 都呼叫一次 `start`,最省事。
 - 寫 spec 寫到一半被讀到沒關係:解析不了的內容會等下一次再讀。一直解析不了才會記一筆 `error`。
+- 檔案開頭帶 BOM 也收(Windows PowerShell 5 的 `Set-Content -Encoding UTF8` 會加)。
+- Windows 上,`start` 起的那支不會跟著呼叫它的程式一起被收掉(`hc exec`、mod 的 `exec` 結束時會收掉自己起的所有程序):先試著脫離呼叫者的工作群組,不被允許就請 Windows 代為啟動(WMI)。
+- 視窗出現時不搶鍵盤焦點;點它才會拿到。
 
 ## spec:`windows/<id>.json`
 
@@ -130,6 +133,7 @@ float.data             // 目前的 data
 ```sh
 cd tools/k-float && cargo build --release     # 產出 target/release/k-float(.exe);install.sh 會幫你跑
 tools/k-float/tests/smoke.sh                  # Linux:在測試環境的 Xvfb :99 跑一輪
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\k-float\tests\smoke.ps1   # Windows:在互動桌面跑(不要經 ssh),會開一個小視窗約 15 秒
 K_FLOAT_DISPLAY=:0 tools/k-float/tests/desktop.sh   # Linux:在實體桌面驗置頂 / 移動 / 使用者關窗(會開一個小視窗約 10 秒)
 ```
 

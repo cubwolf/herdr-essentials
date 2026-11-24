@@ -170,11 +170,42 @@ fn start(dir: &Path) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        child.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        // Whoever ran `start` (Herdr's exec, hc exec) may end everything in its job when `start`
+        // returns: leave the job. Not every job allows that; then start inside it.
+        child.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+        if child.spawn().is_ok() {
+            println!("started");
+            return Ok(());
+        }
+        // The job doesn't let go (hc exec, 2026-11-24: a child started here died with `start`).
+        // Ask Windows to start it instead (WMI): that process belongs to no one's job, and
+        // still opens its windows on this desktop.
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let quoted = |p: &Path| p.display().to_string().replace('\'', "''");
+        let script = format!(
+            "(Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='\"{}\" run \"{}\"'}}).ReturnValue",
+            quoted(&exe),
+            quoted(dir)
+        );
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|e| format!("can't start the helper (powershell): {e}"))?;
+        let answer = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if answer != "0" {
+            return Err(format!("can't start the helper (WMI answered {answer:?}): {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        println!("started");
+        return Ok(());
     }
-    child.spawn().map_err(|e| format!("can't start the helper: {e}"))?;
-    println!("started");
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        child.spawn().map_err(|e| format!("can't start the helper: {e}"))?;
+        println!("started");
+        Ok(())
+    }
 }
 
 fn run(dir: &Path) -> Result<(), String> {
@@ -319,7 +350,9 @@ fn watch(dir: &Path, proxy: EventLoopProxy<UserEvent>) {
             let mut texts = HashMap::new();
             for id in now.keys() {
                 // Unreadable right now (being replaced): an empty text fails to parse and is retried.
-                texts.insert(id.clone(), fs::read_to_string(windows.join(format!("{id}.json"))).unwrap_or_default());
+                // Windows PowerShell 5 writes UTF-8 with a byte order mark; JSON doesn't allow one.
+                let text = fs::read_to_string(windows.join(format!("{id}.json"))).unwrap_or_default();
+                texts.insert(id.clone(), text.trim_start_matches('\u{feff}').to_string());
             }
             // An empty or half-written file: look again on the next pass.
             let partial = texts.values().any(|t| serde_json::from_str::<Value>(t).is_err());
@@ -373,6 +406,8 @@ fn open(
     let (ipc_id, ipc_proxy) = (id.to_string(), proxy.clone());
     let (load_id, load_proxy) = (id.to_string(), proxy.clone());
     let webview_builder = WebViewBuilder::new_with_web_context(context)
+        // A window that appears must not take the keyboard from what the person is typing in.
+        .with_focused(false)
         .with_initialization_script(PAGE_API)
         .with_html(&spec.html)
         .with_ipc_handler(move |request| {
@@ -480,7 +515,7 @@ fn settle(dir: &Path, f: &mut Float) {
 fn remember(dir: &Path, f: &Float) {
     let path = dir.join("windows").join(format!("{}.json", f.id));
     let Ok(text) = fs::read_to_string(&path) else { return };
-    let Ok(Value::Object(mut spec)) = serde_json::from_str::<Value>(&text) else { return };
+    let Ok(Value::Object(mut spec)) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { return };
     if let (Some(x), Some(y)) = (f.spec.x, f.spec.y) {
         spec.insert("x".into(), json!(x));
         spec.insert("y".into(), json!(y));
