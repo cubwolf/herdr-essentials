@@ -23,6 +23,7 @@ notices are kept as required.
   - `mods/k-chrome/` (from `workspace-chrome`)
   - `mods/k-agents/` (from `agents`)
   - `mods/k-files/` (from `files`)
+  - `mods/k-pane/` (from `pane`, Herdr 0.1.18)
   - `mods/k-settings/main.js` (from `frame/settings`)
 - Full license text: [`LICENSE`](LICENSE) (this repository is Apache-2.0 as well). Upstream ships
   no NOTICE file.
