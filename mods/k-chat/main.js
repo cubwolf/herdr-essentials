@@ -14,6 +14,10 @@ import { v_flex, h_flex, InputState, Input, TextView, ScrollHandle } from "gpui-
 import { spaces, exec, readTextFile, appHome, theme, props, closeOverlay, run, notify, checking } from "herdr";
 
 const RUNNER = () => `${appHome().replace(/[\\/]+$/, "")}/tools/k-chat/runner.mjs`;
+// Where a model comes from (the same list as tools/k-chat/lib.mjs): the CLI started for it.
+const SOURCES = [["claude", "Claude", "claude"], ["codex", "Codex", "codex"], ["gemini", "Gemini", "agy"]];
+const sourceId = (x) => x?.agent ?? "claude";
+const sourceLabel = (x) => `${SOURCES.find(([id]) => id === sourceId(x))?.[1] ?? x?.agent}${x?.model ? ` ${x.model}` : ""}`;
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 
 // The record as messages (the same rule as tools/k-chat/lib.mjs and porthole's #chat).
@@ -41,6 +45,10 @@ export default class Chat extends View {
     this.topic = InputState.new({ placeholder: "主題(也是檔名),例:k-chat 要不要支援 Codex" });
     this.opening = InputState.new({ placeholder: "開場:要大家討論什麼?" });
     this.rounds = InputState.new({ placeholder: "12", value: "12" });
+    this.have = null;         // which sources this machine's PATH has ({ claude, codex, gemini }), null: not asked yet
+    this.src = new Map();     // new form: space id → its member's source
+    this.models = new Map();  // new form: space id → its member's model field
+    this.chairSrc = "claude"; this.chairModel = InputState.new({ placeholder: "模型(空白 = 預設)", value: "sonnet" });
     this.say = InputState.new({ placeholder: "說點什麼… @成員 指定下一個發言 · /stop 中止這一輪 · /end 收尾" });
     this.say.on("submit", (_e, cx) => this.send(this.say.value(), cx));
     this.opening.on("submit", (_e, cx) => this.create(cx));
@@ -49,6 +57,7 @@ export default class Chat extends View {
     const own = props()?.state ?? _p?.state;
     if (own) this.open(own, cx);
     cx.spawn(async (cx) => { await this.loadTopics(); cx.notify(); });
+    cx.spawn(async (cx) => { try { this.have = JSON.parse(await this.cmd(["sources"])); cx.notify(); } catch {} });
     // The list is read again every few seconds (spaces arrive after init; discussions get made elsewhere).
     cx.timer.every(4000, (cx) => { if (this.view === "list" && !this.busy) cx.spawn(async (cx) => { await this.loadTopics(); cx.notify(); }); });
     cx.timer.every(1000, (cx) => { if (this.view === "chat") cx.spawn(async (cx) => { if (await this.poll() || this.state?.now?.phase !== "done") cx.notify(); }); });
@@ -138,10 +147,12 @@ export default class Chat extends View {
     if (!m) { this.error = "沒有 Space:先開一個 Space 當主 Space。"; cx.notify(); return; }
     if (m.machine) { this.error = `主 Space 要在這台機器上(${m.name} 在 ${m.machine});成員可以在別台。`; cx.notify(); return; }
     if (!topic || !opening) { this.error = "主題和開場都要填。"; cx.notify(); return; }
-    const list = spaces().filter((s) => this.picked.has(s.id)).map((s) => ({ name: s.name, space: s.name, machine: s.machine, cwd: s.folder }));
+    const list = spaces().filter((s) => this.picked.has(s.id))
+      .map((s) => ({ name: s.name, space: s.name, machine: s.machine, cwd: s.folder, agent: this.src.get(s.id) ?? "claude", model: this.models.get(s.id)?.value().trim() || null }));
     if (!list.length) { this.error = "至少邀一個 agent。"; cx.notify(); return; }
     this.act("建立討論…", cx, async (cx) => {
       const path = await this.cmd(["new", "--repo", m.folder, "--topic", topic, "--title", topic, "--space", m.name, "--members", JSON.stringify(list), "--say", opening,
+        "--chair-agent", this.chairSrc, ...(this.chairModel.value().trim() ? ["--chair-model", this.chairModel.value().trim()] : []),
         "--max-rounds", String(Number(this.rounds.value()) > 0 ? Number(this.rounds.value()) : 12), ...(this.yolo ? [] : ["--no-yolo"])]);
       this.topic.set_value(""); this.opening.set_value("");
       this.statePath = path;
@@ -177,6 +188,17 @@ export default class Chat extends View {
       .child(div().flex_none().child(label))
       .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim).child(hint ?? ""));
 
+    // Claude | Codex | Gemini: one is on, or (value null) each is a button. Dimmed: this machine's
+    // PATH doesn't have that CLI (a member on another machine uses the one there, unknown from here).
+    const chips = (id, value, machine, pick) => h_flex().flex_none().gap(4).children(SOURCES.map(([src, label, bin]) => {
+      const missing = !machine && this.have && !this.have[src], on = value === src;
+      return h_flex().id(`${id}-${src}`).h(22).px(8).items_center().rounded(6).flex_none().border_1().text_size(11).cursor_pointer()
+        .border_color(on ? t.accent : t.input).bg(t.raised).text_color(on ? t.accent : t.muted).when(Boolean(missing), (el) => el.opacity(0.45))
+        .hover((st) => st.opacity(0.85))
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => pick(src, cx))
+        .tooltip(missing ? `這台的 PATH 找不到 ${bin}` : `${label}(${bin})`).child(label);
+    }));
+
     const top = (title, ...right) => h_flex().h(44).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
       .when(this.view !== "list", (el) => el.child(div().id("k-chat-back").w(20).cursor_pointer().text_color(t.muted)
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
@@ -201,7 +223,7 @@ export default class Chat extends View {
             .child(div().size(8).flex_none().rounded_full().bg(x.status === "running" ? t.working : x.status === "waiting" ? t.blocked : t.done))
             .child(v_flex().flex_1().min_w(0)
               .child(div().truncate().child(x.title))
-              .child(div().truncate().text_size(11).text_color(t.dim).child(x.members.join("、"))))
+              .child(div().truncate().text_size(11).text_color(t.dim).child(x.members.map((n, j) => (x.sources?.[j] ? `${n}(${x.sources[j]})` : n)).join("、"))))
             .child(div().flex_none().text_size(11).text_color(t.dim).child(`${x.status === "done" ? "已結束" : x.status === "waiting" ? "等 Owner" : "進行中"} · ${x.round}/${x.max} 輪`)))),
         note());
     }
@@ -219,14 +241,29 @@ export default class Chat extends View {
             .child(field(this.rounds).w(70))
             .child(button("k-chat-yolo-new", this.yolo ? "允許主席開 YOLO:開" : "允許主席開 YOLO:關", (_e, cx) => { this.yolo = !this.yolo; cx.notify(); },
               { on: this.yolo, tip: "開:主席可以讓某個成員某一輪動手改檔(紀錄裡會有 🔓 一行),那輪結束就收回" })))
-          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(`邀請(${this.picked.size})`))
-          .children(all.map((sp, i) => tick(`k-chat-pick-${i}`, this.picked.has(sp.id), sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`,
-            (_e, cx) => { if (this.picked.has(sp.id)) this.picked.delete(sp.id); else this.picked.add(sp.id); cx.notify(); }))),
+          .child(h_flex().gap(10).items_center()
+            .child(div().text_size(12).text_color(t.muted).child("主席"))
+            .child(chips("k-chat-chair", this.chairSrc, null, (src, cx) => { this.chairSrc = src; this.chairModel.set_value(src === "claude" ? "sonnet" : ""); cx.notify(); }))
+            .child(field(this.chairModel).w(190)))
+          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(`邀請(${this.picked.size})· 每位可以選模型來源`))
+          .children(all.map((sp, i) => {
+            const on = this.picked.has(sp.id);
+            return h_flex().gap(8).items_center()
+              .child(tick(`k-chat-pick-${i}`, on, sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`, (_e, cx) => {
+                if (on) this.picked.delete(sp.id);
+                else { this.picked.add(sp.id); if (!this.models.has(sp.id)) this.models.set(sp.id, InputState.new({ placeholder: "模型(空白 = 預設)" })); }
+                cx.notify();
+              }).flex_1().min_w(0))
+              .when(on, (el) => el
+                .child(chips(`k-chat-src-${i}`, this.src.get(sp.id) ?? "claude", sp.machine, (src, cx) => { this.src.set(sp.id, src); this.models.get(sp.id)?.set_value(""); cx.notify(); }))
+                .child(field(this.models.get(sp.id)).w(150).flex_none()));
+          })),
         note());
     }
 
     // The discussion.
     const names = s?.members?.map((x) => x.name) ?? [];
+    const bySource = (who) => { const x = s?.members?.find((y) => who.startsWith(`${y.name}@`)); return x ? sourceLabel(x) : ""; };
     const tint = (who) => { const i = names.findIndex((n) => who.startsWith(`${n}@`)); return [t.ansi4, t.ansi2, t.ansi5, t.ansi3, t.ansi6][Math.max(0, i) % 5]; };
     const hosted = this.hosted(), now = s?.now ?? {};
     const secs = Math.max(0, Math.round((Date.now() - (now.since ?? Date.now())) / 1000));
@@ -251,19 +288,28 @@ export default class Chat extends View {
       h_flex().h(28).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).text_size(11.5)
         .child(div().size(8).flex_none().rounded_full().bg(!hosted ? t.blocked : active ? t.working : s?.status === "done" ? t.done : t.idle ?? t.dim))
         .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(status))
-        .child(div().flex_none().truncate().text_color(t.dim).child(names.join("、")))
+        .child(div().flex_none().truncate().text_color(t.dim).child((s?.members ?? []).map((x) => `${x.name}(${sourceLabel(x)})`).join("、")))
         .when(Boolean(s) && !hosted, (el) => el.child(button("k-chat-host", "Resume", (_e, cx) => this.act("啟動主持程式…", cx, () => this.host()), { primary: true, tip: "在背景接著主持(herdr-core 裡的 terminal,不佔側欄)" })))
         .when(Boolean(s) && hosted && !active, (el) => el.child(button("k-chat-quit", "Stop host", (_e, cx) => this.act("關閉主持程式…", cx, () => this.cmd(["quit", this.statePath])), { tip: "讓背景的主持程式離開;紀錄留著,之後發言或按 Resume 會再起來" }))),
-      this.inviting ? v_flex().flex_none().max_h(220).overflow_y_scrollbar().p(8).border_b(1).border_color(t.border)
+      this.inviting ? v_flex().flex_none().max_h(240).overflow_y_scrollbar().p(8).gap(2).border_b(1).border_color(t.border)
+        .child(h_flex().min_h(30).px(8).gap(9).items_center()
+          .child(div().flex_1().min_w(0).truncate().child(`主席 · 現在是 ${sourceLabel(s?.chair)}`))
+          .child(chips("k-chat-chair-set", sourceId(s?.chair), null, (src, cx) => this.act("換主席…", cx, () => this.cmd(["set", this.statePath, `chair_agent=${src}`])))))
         .when(!others.length, (el) => el.child(div().p(6).text_size(12).text_color(t.dim).child("所有 Space 都已經在討論裡。")))
-        .children(others.map((sp, i) => tick(`k-chat-inv-${i}`, false, sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`,
-          (_e, cx) => { this.inviting = false; this.act("邀請…", cx, () => this.cmd(["invite", this.statePath, JSON.stringify({ name: sp.name, space: sp.name, machine: sp.machine, cwd: sp.folder })])); }))) : div(),
+        .children(others.map((sp, i) => h_flex().min_h(30).px(8).gap(9).items_center()
+          .child(div().flex_none().child(sp.name))
+          .child(div().flex_1().min_w(0).truncate().text_right().text_size(11).text_color(t.dim).child(`${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`))
+          .child(chips(`k-chat-inv-${i}`, null, sp.machine, (src, cx) => {
+            this.inviting = false;
+            this.act("邀請…", cx, () => this.cmd(["invite", this.statePath, JSON.stringify({ name: sp.name, space: sp.name, machine: sp.machine, cwd: sp.folder, agent: src })]));
+          })))) : div(),
       v_flex().id("k-chat-record").flex_1().min_h(0).overflow_y_scrollbar().track_scroll(this.scroll).p(12).gap(10)
         .children(this.msgs.map((x, i) => v_flex().flex_none().gap(3).px(11).py(8).rounded(9)
           .bg(x.role === "owner" ? `${t.accent}1f` : x.role === "chair" ? `${t.background}00` : t.raised ?? t.hover)
           .when(x.role === "chair", (el) => el.border_1().border_color(t.border))
           .child(h_flex().gap(8).items_center().text_size(11)
             .child(div().font_semibold().text_color(x.role === "owner" ? t.accent : x.role === "chair" ? t.muted : tint(x.who)).child(x.who))
+            .when(x.role === "member" && Boolean(bySource(x.who)), (el) => el.child(div().px(5).rounded(4).border_1().border_color(t.border).text_color(t.muted).child(bySource(x.who))))
             .child(div().text_color(t.dim).child(x.time))
             .when(x.text.includes("🔓"), (el) => el.child(div().px(5).rounded(4).bg(`${t.blocked}33`).text_color(t.blocked).child("YOLO"))))
           .child(div().text_size(x.role === "chair" ? 12.5 : 13.5).line_height(1.5).when(x.role === "chair", (el) => el.text_color(t.muted))

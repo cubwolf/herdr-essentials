@@ -91,16 +91,33 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 - **多了幾個 Owner 指令**:`/end` 請主席現在收尾;主席可以把 next 填 `owner` 來等 Owner 回話;結束後 Owner 再發言會重新開始(至少再給 6 輪)。
 - **唯讀怎麼做**:Claude Code 用 `--tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools 同上 --strict-mcp-config`(連 MCP 都不載,免得成員用 MCP 工具寫東西);YOLO 那一輪改成 `--dangerously-skip-permissions`、不限工具。主席自己 `--tools ""`,什麼工具都沒有。
 
+## 模型來源:Claude / Codex / Gemini(2026-11-24,Owner 要求)
+
+主席和每位成員各自選來源,狀態檔記 `agent`(`claude` / `codex` / `gemini`)與 `model`(空 = 那個 CLI 的預設)。舊的狀態檔沒有這些欄,視為 Claude。
+
+| 來源 | 跑什麼 | 唯讀輪 | YOLO 輪 | 接續 | 主席的 JSON |
+|---|---|---|---|---|---|
+| Claude | `claude -p --output-format json` | 只給讀的工具、不載 MCP | `--dangerously-skip-permissions` | `--resume` | `--json-schema` |
+| Codex | `codex exec --json … -` | `--sandbox read-only` | `--dangerously-bypass-approvals-and-sandbox` | `resume <id>` | `--output-schema <檔>` |
+| Gemini | `agy`,stdin / stdout 都是 `stream-json` | 預設模式 + `--sandbox` + 主持程式盯著 | `--dangerously-skip-permissions` | `--conversation <id>` | `--json-schema` |
+
+- **agy 沒有唯讀開關**:`--mode plan` 只是在提示前面加 `/plan`,而且無頭時會自動通過計畫審查,不能當唯讀用。靠的是預設模式「先問再動」:無頭時沒人回答就拒絕。新版(1.5.7 起)預設改成 `auto`,會自動改檔;1.2.9 又不認 `--mode default`,沒有一個參數能在各版本都鎖住。所以主持程式讀它輸出的第一個事件:`permission_mode` 不是 `request-review` 就中止;之後只要看到寫檔 / 跑指令的工具真的成功了,也中止並寫進紀錄。後者是事後發現,擋不掉已經寫下去的那一次。
+- **agy 的提示走 stdin**(`--input-format stream-json`):紀錄最多 6 萬字,放在參數裡會超過上限。
+- **Codex / Gemini 當主席時在一個空的暫存資料夾裡跑**:它們沒有「不給工具」的參數。
+- **修掉一個錯**:`codex exec resume` 不收 `--sandbox`(只有 `--model`、`--json` 這類是全域參數),第一版把它放在 `resume` 後面;現在放前面。
+- **模型名只收英數與 `._-:/@+[]`**,開頭要是英數:它會變成程式參數。
+
 ## skill / plugin 放哪(2026-11-24,Owner)
 
 - 這個之後要公開,**不放 my-claude-plugins**(私人的);放本 repo。
 - plugin 就是 `tools/k-chat/` 本身:`.claude-plugin/plugin.json` + `skills/k-chat/SKILL.md` + `commands/`(`new` / `say` / `invite` / `status`),跟 `runner.mjs` 同一個資料夾,所以裝起來是自足的(`${CLAUDE_PLUGIN_ROOT}/runner.mjs`)。repo 根目錄的 `.claude-plugin/marketplace.json` 把這個 repo 當 marketplace。
-- 從 Claude Code 啟動主持程式用 `runner.mjs start`:`hc run --bg --keep --no-parent`(旗標都在 `--` 前、子程序拿掉 `TMUX` / `CLAUDECODE`),再把那個 terminal 寫進 Herdr App 的排版(core 文件 `herdr-app`)。
+- 從 Claude Code 啟動主持程式用 `runner.mjs start`:`hc run --bg --keep --no-parent`(旗標都在 `--` 前、子程序拿掉 `TMUX` / `CLAUDECODE`),再把討論寫進 Herdr App 的排版(core 文件 `herdr-app`),是跟 mod 開的一樣的「💬 主題」tab。(2026-11-24 改:原本寫進去的是主持程式的 terminal,點了只看到 log。)
 
 ## 還沒做 / 已知限制
 
 - 帶入 tab 的對話(`--resume <tab 的 session> --fork-session`):主持程式支援(成員 JSON 的 `fork` 欄),mod 的邀請畫面還沒有 —— mod 拿不到某個 tab 的 session 編號。
-- Codex 成員:參數照 `codex exec` 文件寫了,這台沒裝 Codex,沒實測。
+- Codex:參數照官方文件與原始碼寫,back 和 laptop 都沒裝,沒實測。Windows 上 npm 裝的 `codex.cmd` 會經過 cmd 啟動,也沒實測;別台 Windows 的 Codex 成員(`hc exec`)不確定叫不叫得起 `.cmd`。
+- Gemini(agy):back 裝了 1.2.9 但沒登入,只驗到「沒登入時的錯誤」;正常回答、唯讀輪真的會拒絕寫檔、`permission_mode` 的值,都只依官方文件、用假的 agy 測過。
 - 主 Space 要在跑 Herdr App 的那台機器上(mod 只能在本機寫檔、起程式);成員可以在別台。
 - 別台機器的成員走 `hc exec`,一輪最多 10 分鐘(本機 15 分鐘、YOLO 30 分鐘)。
 - plugin 的指令(`/k-chat:new` 等)還沒在真的 Claude Code session 裡裝起來跑過;`claude plugin validate` 過了,`start` 在測試環境的 core 實跑過。

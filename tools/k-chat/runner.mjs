@@ -4,14 +4,17 @@
 // headless in its own folder (on its own machine), write the answer to doc/chat/<topic>.md.
 //
 //   runner.mjs new --repo DIR --topic NAME --members JSON [--title T] [--space S] [--say TEXT]
-//                  [--max-rounds N] [--chair-model M] [--no-yolo]     make the files, print the state path
+//                  [--max-rounds N] [--chair-agent claude|codex|gemini] [--chair-model M] [--no-yolo]
+//                                      make the files, print the state path
 //   runner.mjs list --repo DIR         that repo's discussions, as JSON
-//   runner.mjs start <state.json> [--no-layout]   host it in a herdr-core terminal of its own (hc run --keep), shown in
-//                                      the Herdr App's sidebar unless --no-layout (the k-chat mod: its tab is the discussion)
+//   runner.mjs start <state.json> [--no-layout]   host it in a herdr-core terminal of its own (hc run --keep); the
+//                                      discussion gets a tab in the Herdr App unless --no-layout (the mod makes it)
 //   runner.mjs run <state.json>        host it here, in this terminal (picks up where it stopped)
 //   runner.mjs say <state.json> TEXT   the Owner speaks (/stop, /end, @member)
-//   runner.mjs invite <state.json> JSON   add a member: { name?, space, machine?, cwd, agent?, fork? }
-//   runner.mjs set <state.json> allow_yolo=false|max_rounds=20|chair_model=haiku
+//   runner.mjs invite <state.json> JSON   add a member: { name?, space, machine?, cwd, agent?, model?, fork? }
+//                                      agent: claude (default) | codex | gemini (the agy CLI)
+//   runner.mjs set <state.json> allow_yolo=false|max_rounds=20|chair_agent=codex|chair_model=haiku
+//   runner.mjs sources                 which of those CLIs this machine has, as JSON
 //   runner.mjs card <state.json> 0,2   open Tide cards for those to-dos of the conclusion
 //   runner.mjs quit <state.json>       the runner leaves (the record stays)
 //
@@ -25,8 +28,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import * as L from "./lib.mjs";
 
-const CLAUDE = process.env.K_CHAT_CLAUDE || "claude";
-const CODEX = process.env.K_CHAT_CODEX || "codex";
+const BIN = { claude: process.env.K_CHAT_CLAUDE || "claude", codex: process.env.K_CHAT_CODEX || "codex", agy: process.env.K_CHAT_AGY || "agy" };
 const HC = process.env.K_CHAT_HC || "hc";
 const TICK = Number(process.env.K_CHAT_TICK) || 1000;
 const REOPEN = 6; // rounds an Owner message adds to a discussion that had ended
@@ -38,26 +40,48 @@ function childEnv() {
   return env;
 }
 
+// Where a program is on this machine's PATH, or null.
+function which(bin) {
+  if (/[\\/]/.test(bin)) return fs.existsSync(bin) ? bin : null;
+  const exts = process.platform === "win32" ? [".exe", ".cmd"] : [""];
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) for (const x of exts) {
+    const f = path.join(dir, bin + x);
+    try { if (fs.statSync(f).isFile()) return f; } catch {}
+  }
+  return null;
+}
+
 // Runs one program to its end with `input` on stdin. `stop()` is asked every tick: true ends it.
+// `guard(line)` sees every line it prints: a reason ends it (a read-only turn that isn't).
 // On another machine it goes through herdr-core (hc exec), which caps a run at 10 minutes.
-function run({ bin, args, cwd, machine, input, timeout, stop }) {
-  const real = bin === "claude" ? CLAUDE : bin === "codex" ? CODEX : bin;
-  const [cmd, argv] = machine
+function run({ bin, args, cwd, machine, input, timeout, stop, guard }) {
+  const real = BIN[bin] ?? bin;
+  // npm's CLIs are .cmd files on Windows, which only start through cmd (the arguments are ours: flags, names, a path).
+  const found = !machine && process.platform === "win32" ? which(real) : null;
+  const shell = Boolean(found?.toLowerCase().endsWith(".cmd"));
+  const q = (x) => (/[\s&()^]/.test(x) ? `"${x}"` : x);
+  const [cmd, argv] = shell ? [q(found), args.map(q)] : machine
     ? [HC, ["exec", "--on", machine, "--cwd", cwd, "--timeout", String(Math.min(600, Math.ceil(timeout / 1000))), "-i", "--", real, ...args]]
     : [real, args];
   return new Promise((resolve) => {
-    let out = "", err = "", stopped = false, over = false;
-    const child = spawn(cmd, argv, { cwd: machine ? undefined : cwd, env: childEnv(), detached: process.platform !== "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    let out = "", err = "", stopped = false, over = false, broke = null, seen = 0;
+    const child = spawn(cmd, argv, { cwd: machine ? undefined : cwd, env: childEnv(), shell, detached: process.platform !== "win32", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     const end = () => { try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} } };
     const timer = setInterval(() => { if (stop?.()) { stopped = true; end(); } }, TICK);
     const limit = setTimeout(() => { over = true; end(); }, timeout);
     current = end;
-    child.stdout.on("data", (d) => { out += d; });
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      out += d;
+      if (!guard || broke) return;
+      for (let nl = out.indexOf("\n", seen); nl >= 0 && !broke; nl = out.indexOf("\n", seen)) { broke = guard(out.slice(seen, nl)); seen = nl + 1; }
+      if (broke) end();
+    });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", (e) => { err += String(e?.message ?? e); });
     child.on("close", (code) => {
       clearInterval(timer); clearTimeout(limit); current = null;
-      resolve({ code: code ?? 1, stdout: out, stderr: err, stopped, over });
+      resolve({ code: code ?? 1, stdout: out, stderr: err, stopped, over, broke });
     });
     child.stdin.on("error", () => {});
     child.stdin.end(input ?? "");
@@ -68,10 +92,11 @@ let current = null; // ends the program that is running now
 class Stopped extends Error {}
 
 async function agent(spec, opts) {
-  const r = await run({ ...spec, ...opts });
+  const r = await run({ ...spec, ...opts, input: L.feed(spec.agent, opts.input) });
   if (r.stopped) throw new Stopped();
   if (r.over) throw new Error(`超過 ${Math.round(opts.timeout / 60000)} 分鐘沒講完`);
-  try { return L.parseReply(spec.bin === "codex" ? "codex" : "claude", r.stdout); }
+  if (r.broke) throw new Error(r.broke);
+  try { return L.parseReply(spec.agent, r.stdout); }
   catch (e) { throw new Error(r.code !== 0 ? `${e.message}${r.stderr.trim() ? ` · ${r.stderr.trim().slice(-300)}` : ""}` : e.message); }
 }
 
@@ -93,8 +118,20 @@ function host(statePath) {
   const member = (name) => s.members.find((m) => m.name === name);
   const lastSpeaker = () => s.last ?? null;
 
+  // The chair runs from an empty folder unless it is Claude (which gets no tools at all): the
+  // others can't be started without theirs, so there is nothing there to read or change.
+  let desk = null;
+  const chair = async (schema, prompt) => {
+    let cwd = s.repo, file = null;
+    if (L.source(s.chair.agent) !== "claude") {
+      cwd = desk ??= fs.mkdtempSync(path.join(os.tmpdir(), "k-chat-chair-"));
+      fs.writeFileSync(file = path.join(cwd, "schema.json"), JSON.stringify(schema));
+    }
+    return L.structured(await agent(L.chairArgv(s.chair, schema, file), { cwd, input: prompt, timeout: 5 * 60000, stop: stopAsked }));
+  };
+
   const pulse = setInterval(beat, 5000);
-  const leave = (code) => { clearInterval(pulse); current?.(); s.runner = null; s.now = { phase: "idle", who: null, since: Date.now() }; L.save(statePath, s); process.exit(code); };
+  const leave = (code) => { clearInterval(pulse); current?.(); if (desk) fs.rmSync(desk, { recursive: true, force: true }); s.runner = null; s.now = { phase: "idle", who: null, since: Date.now() }; L.save(statePath, s); process.exit(code); };
   process.on("SIGTERM", () => leave(0));
   process.on("SIGINT", () => leave(0));
 
@@ -110,12 +147,19 @@ function host(statePath) {
         try {
           const [m] = L.members([msg.member], s.members.map((x) => x.name));
           m.seen = 0; s.members.push(m);
-          write("chair", `➕ ${m.name}@${m.space} 加入討論${m.machine ? `(機器 ${m.machine})` : ""}。`);
+          write("chair", `➕ ${m.name}@${m.space} 加入討論(${L.sourceLabel(m)}${m.machine ? `,機器 ${m.machine}` : ""})。`);
         } catch (e) { write("chair", `⚠️ 邀請失敗:${e.message}`); }
       } else if (msg.type === "set") {
         if (typeof msg.allow_yolo === "boolean") { s.allow_yolo = msg.allow_yolo; write("chair", msg.allow_yolo ? "🔐 Owner 允許主席開 YOLO。" : "🔒 Owner 關掉了主席開 YOLO 的權力。"); }
         if (Number(msg.max_rounds) > 0) s.max_rounds = Number(msg.max_rounds);
-        if (typeof msg.chair_model === "string" && msg.chair_model) s.chair.model = msg.chair_model;
+        if (msg.chair_agent || typeof msg.chair_model === "string") {
+          try {
+            const was = L.source(s.chair.agent), to = msg.chair_agent ? L.source(msg.chair_agent) : was;
+            // Another source: its own default model unless one was named.
+            const model = (typeof msg.chair_model === "string" ? L.modelName(msg.chair_model) : to === was ? s.chair.model : null) ?? L.SOURCES[to].chair;
+            if (to !== was || model !== s.chair.model) { s.chair = { ...s.chair, agent: to, model }; write("chair", `🪑 主席改用 ${L.sourceLabel(s.chair)}。`); }
+          } catch (e) { write("chair", `⚠️ 主席沒換成:${e.message}`); }
+        }
       } else if (msg.type === "card") cards(msg.todos ?? []);
       else if (msg.type === "say" && String(msg.text ?? "").trim()) {
         const say = L.parseSay(msg.text, s.members.map((m) => m.name));
@@ -151,8 +195,7 @@ function host(statePath) {
   async function conclude(why) {
     now("conclude");
     try {
-      const r = await agent(L.chairArgv(s.chair.model, L.CONCLUDE_SCHEMA), { cwd: s.repo, input: L.concludePrompt(s, record()), timeout: 5 * 60000, stop: stopAsked });
-      const c = r.structured ?? JSON.parse(r.text);
+      const c = await chair(L.CONCLUDE_SCHEMA, L.concludePrompt(s, record()));
       s.todos = [...s.todos.filter((t) => t.card), ...(c.todos ?? []).map((t) => ({ title: String(t.title), repo: String(t.repo), detail: String(t.detail), card: null }))];
       write("chair", `### 結論\n\n${why ? `> ${why}\n\n` : ""}${String(c.conclusion).trim().replace(/^#{1,3}(?=\s)/gm, "####")}`);
     } catch (e) {
@@ -166,8 +209,7 @@ function host(statePath) {
     let turn = s.queue.shift();
     if (!turn) {
       now("chair");
-      const r = await agent(L.chairArgv(s.chair.model, L.CHAIR_SCHEMA), { cwd: s.repo, input: L.chairPrompt(s, record()), timeout: 5 * 60000, stop: stopAsked });
-      turn = L.turnFrom(s, r.structured ?? JSON.parse(r.text), lastSpeaker());
+      turn = L.turnFrom(s, await chair(L.CHAIR_SCHEMA, L.chairPrompt(s, record())), lastSpeaker());
       if (turn.done) return conclude(turn.reason);
       if (turn.next === "owner") { write("chair", `→ **@Owner**:${turn.ask}${turn.reason ? `\n\n> ${turn.reason}` : ""}`); s.status = "waiting"; return; }
       write("chair", `→ **@${turn.next}**:${turn.ask}${turn.reason && !turn.yolo ? `\n\n> ${turn.reason}` : ""}${turn.yolo ? `\n\n${L.yoloLine(turn.next, turn.reason)}` : ""}`);
@@ -216,9 +258,10 @@ function spawnTask(args, input, who) {
   return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? String(r.error ?? "") };
 }
 
-// Puts a core terminal in the Herdr App's layout (the core document "herdr-app": spaces → tabs),
-// as a tab of the space whose folder it is, or of a new space. False when it is already there.
-function place(address, folder, tabName) {
+// Puts the discussion in the Herdr App's layout (the core document "herdr-app": spaces → tabs): a
+// tab with the k-chat mod on that state file, the same one the mod makes ("💬 <title>"), in the
+// space whose folder it is, or in a new space. False when it is already there.
+function place(statePath, folder, title) {
   const rpc = (method, params) => {
     const r = spawnSync(HC, ["connect"], { input: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) + "\n", env: childEnv(), encoding: "utf8", timeout: 15000 });
     const res = JSON.parse((r.stdout ?? "").split("\n")[0] || "null");
@@ -228,11 +271,11 @@ function place(address, folder, tabName) {
   const id = (prefix) => prefix + crypto.randomBytes(16).toString("hex");
   const cur = rpc("doc.get", { name: "herdr-app" });
   const value = cur.value ?? {}, spaces = [...(value.spaces ?? [])];
-  if (JSON.stringify(spaces).includes(`"terminal":"${address}"`)) return false;
+  if (JSON.stringify(spaces).includes(`"state":${JSON.stringify(statePath)}`)) return false;
   let sp = spaces.find((x) => x.folder === folder);
   if (!sp) { sp = { id: id("sp"), name: path.basename(folder) || folder, folder, tabs: [] }; spaces.push(sp); }
   const tab = id("tb");
-  sp.tabs = [...(sp.tabs ?? []), { id: tab, name: tabName, root: { id: tab, type: "row", children: [{ id: id("pd"), type: "block", content: { terminal: address } }] } }];
+  sp.tabs = [...(sp.tabs ?? []), { id: tab, name: `💬 ${title}`.slice(0, 40), root: { id: tab, type: "row", children: [{ id: id("pd"), type: "block", content: { mod: "k-chat", props: { state: statePath, space: sp.id } } }] } }];
   rpc("doc.set", { name: "herdr-app", value: { ...value, spaces }, version: cur.version });
   return true;
 }
@@ -259,7 +302,7 @@ function main() {
       if (!o.repo || !o.topic) throw new Error("new 需要 --repo 與 --topic");
       const repo = path.resolve(o.repo), f = L.files(repo, o.topic);
       if (fs.existsSync(f.json)) throw new Error(`已經有這個主題:${f.json}`);
-      const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo });
+      const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo });
       fs.mkdirSync(f.inbox, { recursive: true });
       fs.writeFileSync(f.md, L.header(s));
       L.save(f.json, s);
@@ -274,7 +317,7 @@ function main() {
       for (const n of names) {
         try {
           const s = L.load(path.join(dir, n));
-          out.push({ path: path.join(dir, n), title: s.title, status: s.status, round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name) });
+          out.push({ path: path.join(dir, n), title: s.title, status: s.status, round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name), sources: s.members.map((m) => L.sourceLabel(m)) });
         } catch {}
       }
       console.log(JSON.stringify(out));
@@ -282,7 +325,7 @@ function main() {
     }
     case "start": {
       // Hosts it in a herdr-core terminal of its own (it outlives this shell and the App's
-      // windows), and puts that terminal in the Herdr App's layout so it can be seen and closed.
+      // windows), and puts the discussion in the Herdr App's layout as a tab.
       need();
       const s = L.load(statePath);
       const live = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -295,13 +338,16 @@ function main() {
       if (r.status !== 0) throw new Error(`hc run 失敗:${(r.stderr || r.stdout || String(r.error ?? "")).trim().split("\n").pop()}`);
       let address = null; try { address = JSON.parse(r.stdout.trim().split("\n").pop()).address ?? null; } catch {}
       let placed = false, warn = null;
-      // --no-layout: the Herdr App window shows the discussion itself (the mod's tab); the host stays out of the sidebar.
-      try { placed = address && !o.noLayout ? place(address, s.repo, `chat: ${s.title}`.slice(0, 40)) : false; } catch (e) { warn = `沒寫進 Herdr App 排版(${e.message});terminal 還是在跑:hc attach ${name}`; }
+      // The host's own terminal stays out of the sidebar. --no-layout: the mod makes the tab itself.
+      try { placed = o.noLayout ? false : place(statePath, s.repo, s.title); } catch (e) { warn = `沒寫進 Herdr App 排版(${e.message});主持程式還是在跑:hc attach ${name}`; }
       console.log(JSON.stringify({ started: true, terminal: name, address, in_app_layout: placed, ...(warn ? { warning: warn } : {}) }));
       break;
     }
     case "run": need(); host(statePath); break;
     case "say": L.drop(need().inbox, { type: "say", text: o._.slice(1).join(" ") }); break;
+    case "sources":
+      console.log(JSON.stringify(Object.fromEntries(Object.entries(L.SOURCES).map(([id, x]) => [id, Boolean(which(BIN[x.bin]))]))));
+      break;
     case "invite": L.drop(need().inbox, { type: "invite", member: JSON.parse(o._[1]) }); break;
     case "set": {
       const msg = { type: "set" };
@@ -309,7 +355,8 @@ function main() {
         const [k, v] = kv.split("=");
         if (k === "allow_yolo") msg.allow_yolo = v === "true";
         else if (k === "max_rounds") msg.max_rounds = Number(v);
-        else if (k === "chair_model") msg.chair_model = v;
+        else if (k === "chair_agent") msg.chair_agent = L.source(v);
+        else if (k === "chair_model") msg.chair_model = L.modelName(v) ?? "";
         else throw new Error(`不認得的設定:${k}`);
       }
       L.drop(need().inbox, msg);
@@ -318,7 +365,7 @@ function main() {
     case "card": L.drop(need().inbox, { type: "card", todos: String(o._[1] ?? "").split(",").filter(Boolean).map(Number) }); break;
     case "quit": L.drop(need().inbox, { type: "quit" }); break;
     default:
-      console.error("用法:runner.mjs new|list|start|run|say|invite|set|card|quit …(見檔頭)");
+      console.error("用法:runner.mjs new|list|start|run|say|invite|set|card|quit|sources …(見檔頭)");
       process.exit(2);
   }
 }

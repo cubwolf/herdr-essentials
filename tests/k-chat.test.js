@@ -1,5 +1,5 @@
-// k-chat runner (tools/k-chat): whole discussions run offline, with stand-ins for claude,
-// hc and tide's task (tests/fixtures). Checks the record, the state, and what each agent was
+// k-chat runner (tools/k-chat): whole discussions run offline, with stand-ins for claude, codex,
+// agy, hc and tide's task (tests/fixtures). Checks the record, the state, and what each agent was
 // started with (read-only vs YOLO, resume, the other machine going through hc).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -14,13 +14,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(HERE, "..", "tools", "k-chat", "runner.mjs");
 const FIX = (n) => path.join(HERE, "fixtures", n);
 
-function setup(chair, opts = []) {
+function setup(chair, opts = [], list = null) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "k-chat-"));
-  const dirs = Object.fromEntries(["main", "alpha", "beta", "fake"].map((n) => [n, path.join(root, n)]));
+  const dirs = Object.fromEntries(["main", "alpha", "beta", "gamma", "fake"].map((n) => [n, path.join(root, n)]));
   for (const d of Object.values(dirs)) fs.mkdirSync(d);
   fs.writeFileSync(path.join(dirs.fake, "chair.json"), JSON.stringify(chair));
-  const env = { ...process.env, K_CHAT_CLAUDE: FIX("fake-claude.mjs"), K_CHAT_HC: FIX("fake-hc.mjs"), K_CHAT_TASK: FIX("fake-task.mjs"), K_FAKE_DIR: dirs.fake, K_CHAT_TICK: "40" };
-  const members = [{ space: "alpha", cwd: dirs.alpha }, { space: "beta", cwd: dirs.beta, machine: "laptop" }];
+  const env = { ...process.env, K_CHAT_CLAUDE: FIX("fake-claude.mjs"), K_CHAT_CODEX: FIX("fake-codex.mjs"), K_CHAT_AGY: FIX("fake-agy.mjs"), K_CHAT_HC: FIX("fake-hc.mjs"), K_CHAT_TASK: FIX("fake-task.mjs"), K_FAKE_DIR: dirs.fake, K_CHAT_TICK: "40" };
+  const members = list?.(dirs) ?? [{ space: "alpha", cwd: dirs.alpha }, { space: "beta", cwd: dirs.beta, machine: "laptop" }];
   const cli = (...args) => spawnSync("node", [RUNNER, ...args], { env, encoding: "utf8" });
   const made = cli("new", "--repo", dirs.main, "--topic", "方案 討論", "--members", JSON.stringify(members), "--say", "要用哪個方案?", ...opts);
   assert.equal(made.status, 0, made.stderr);
@@ -166,7 +166,7 @@ test("輪數上限、關掉 YOLO、中途邀請、失敗會記下來", async () 
     assert.ok(t.calls().every((c) => !c.args.includes("--dangerously-skip-permissions")));
     assert.ok(t.md().includes("### 結論\n\n> 到了 2 輪上限\n\n#### 決定"));
 
-    const gamma = path.join(t.root, "gamma"); fs.mkdirSync(gamma);
+    const gamma = t.dirs.gamma;
     t.cli("invite", t.state, JSON.stringify({ space: "gamma", cwd: gamma }));
     t.flag("fail-gamma", true);
     t.cli("say", t.state, "@gamma 歡迎,你怎麼看?");
@@ -196,8 +196,9 @@ test("start:在 herdr-core 開自己的 terminal(hc run --keep),並寫進 Herdr 
     assert.equal(doc.value.other, "kept", "排版文件其他欄位原樣留著");
     const [sp] = doc.value.spaces;
     assert.equal(sp.folder, t.dirs.main);
-    assert.equal(sp.tabs[0].root.children[0].content.terminal, "t99");
-    assert.equal(sp.tabs[0].name, "chat: 方案 討論");
+    // 側欄那一列是對話畫面(k-chat mod),不是主持程式的 log
+    assert.deepEqual(sp.tabs[0].root.children[0].content, { mod: "k-chat", props: { state: t.state, space: sp.id } });
+    assert.equal(sp.tabs[0].name, "💬 方案 討論");
     // 已經在排版裡就不重複加
     const again = JSON.parse(spawnSync("node", [RUNNER, "start", t.state], { env, encoding: "utf8" }).stdout);
     assert.equal(again.in_app_layout, false);
@@ -206,6 +207,58 @@ test("start:在 herdr-core 開自己的 terminal(hc run --keep),並寫進 Herdr 
     const list = JSON.parse(t.cli("list", "--repo", t.dirs.main).stdout);
     assert.deepEqual(list.map((x) => [x.title, x.status, x.round, x.members]), [["方案 討論", "running", 0, ["alpha", "beta"]]]);
     assert.equal(list[0].path, t.state);
+  } finally { await t.stop(); }
+});
+
+test("三種模型來源:成員各用各的、主席可以換,唯讀參數與 session 都對", async () => {
+  const t = setup([pick("alpha"), pick("beta"), pick("gamma", { yolo: true, reason: "請動手" }), pick("gamma"), pick("alpha")], ["--chair-agent", "codex"], (d) => [
+    { space: "alpha", cwd: d.alpha, agent: "codex", model: "gpt-x" }, { space: "beta", cwd: d.beta }, { space: "gamma", cwd: d.gamma, agent: "agy", machine: "laptop" }]);
+  try {
+    assert.match(t.md(), /主席 Codex · 成員:alpha@alpha\(Codex gpt-x\)、beta@beta\(Claude\)、gamma@gamma\(Gemini\)/);
+    t.start();
+    await t.until("結論", () => t.s().status === "done");
+    assert.match(t.md(), /Codex 寫的結論/);
+    const of = (bin, ok = () => true) => t.calls().filter((c) => (c.bin ?? "claude") === bin && ok(c.args));
+    const chair = of("codex", (a) => a.includes("--output-schema"));
+    assert.ok(chair.length >= 6 && chair.every((c) => c.args.includes("--ephemeral") && c.args[c.args.indexOf("--sandbox") + 1] === "read-only"));
+    assert.notEqual(fs.realpathSync(path.dirname(chair[0].cwd)), fs.realpathSync(t.root), "主席不在任何 repo 裡跑");
+    const [a1, a2] = of("codex", (a) => !a.includes("--output-schema"));
+    assert.deepEqual(a1.args, ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "-"]);
+    assert.deepEqual(a2.args.slice(-3), ["resume", "th-alpha", "-"]);
+    assert.equal(of("claude").length, 1);
+    const [g1, g2] = of("agy");
+    assert.ok(g1.args.includes("--dangerously-skip-permissions") && !g1.args.includes("--sandbox"));
+    assert.ok(!g2.args.includes("--dangerously-skip-permissions") && g2.args.includes("--sandbox"));
+    assert.deepEqual(g2.args.slice(-2), ["--conversation", "conv-gamma"]);
+    assert.equal(g1.via, "hc:laptop");
+    assert.match(g1.input, /你被邀請進一場多 agent 討論/);
+    assert.deepEqual(L.messages(t.md()).filter((m) => m.role === "member").map((m) => m.text), ["alpha 的回答(Codex)", "beta 的回答 #" + t.calls().findIndex((c) => !c.bin), "gamma 的回答(Gemini)", "gamma 的回答(Gemini)", "alpha 的回答(Codex)"]);
+
+    // 換主席:別的來源就用它自己的預設模型
+    assert.notEqual(t.cli("set", t.state, "chair_agent=grok").status, 0);
+    t.cli("set", t.state, "chair_agent=gemini");
+    await t.until("換主席", () => t.s().chair.agent === "gemini");
+    assert.match(t.md(), /🪑 主席改用 Gemini。/);
+    t.cli("say", t.state, "/end");
+    t.cli("say", t.state, "再一輪 @beta");
+    t.cli("say", t.state, "/end");
+    await t.until("Gemini 收尾", () => /Gemini 寫的結論/.test(t.md()));
+  } finally { await t.stop(); }
+});
+
+test("Gemini 的唯讀輪:模式不對、真的寫了檔、沒登入,都會停下來並記下", async () => {
+  const t = setup([], [], (d) => [{ space: "gamma", cwd: d.gamma, agent: "gemini" }]);
+  try {
+    const turn = async (want) => { t.cli("say", t.state, "@gamma 說說看"); await t.until(String(want), () => want.test(t.md())); };
+    fs.writeFileSync(path.join(t.dirs.fake, "agy-mode"), "auto");
+    t.start();
+    await turn(/gamma 這一輪失敗:agy 不是在「先問再動」的模式\(permission_mode: auto\)/);
+    t.flag("agy-mode", false); t.flag("agy-writes", true);
+    await turn(/gamma 這一輪失敗:唯讀輪裡 agy 跑了 write_to_file/);
+    t.flag("agy-writes", false); t.flag("agy-out", true);
+    await turn(/gamma 這一輪失敗:Gemini\(agy\):authentication failed or timed out\(先在那台機器跑一次 agy 登入\)/);
+    t.flag("agy-out", false);
+    await turn(/gamma 的回答\(Gemini\)/); // 被拒絕的 run_command 不算
   } finally { await t.stop(); }
 });
 
@@ -228,7 +281,19 @@ test("lib:Owner 的話、主席的回答、紀錄格式", () => {
   assert.equal([...md.matchAll(/^## (🧑 Human|🤖 Assistant)[^\n]*$/gm)].length, 3);
   assert.deepEqual(L.messages(md).map((m) => [m.role, m.who]), [["owner", "Owner"], ["chair", "主席"], ["member", "alpha@alpha"]]);
   assert.ok(L.memberArgv({ agent: "claude", fork: "abc" }, false).args.join(" ").includes("--resume abc --fork-session"));
-  assert.deepEqual(L.memberArgv({ agent: "codex", session: "th1" }, false).args, ["exec", "resume", "th1", "--json", "--sandbox", "read-only", "-"]);
+  assert.deepEqual(L.memberArgv({ agent: "codex", session: "th1", model: "gpt-x" }, false).args, ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "resume", "th1", "-"]);
+  assert.equal(L.source("agy"), "gemini");
+  assert.equal(L.source(null), "claude");
+  for (const bad of ["grok", "toString", "constructor"]) assert.throws(() => L.source(bad), /不認得的模型來源/);
+  assert.equal(L.modelName(" opus "), "opus");
+  assert.equal(L.modelName("claude-opus-5-5[1m]"), "claude-opus-5-5[1m]");
+  for (const bad of ["--yolo", "a b", 'x"&calc', "a;b", "$(x)"]) assert.throws(() => L.modelName(bad), /模型名字不對/);
+  assert.throws(() => L.members([{ space: "x", cwd: "/a", agent: "codex", fork: "abc" }]), /只支援 Claude/);
+  assert.deepEqual(L.newState({ repo: "/r", topic: "t", chairAgent: "codex" }).chair, { agent: "codex", model: null });
+  assert.deepEqual(L.newState({ repo: "/r", topic: "t" }).chair, { agent: "claude", model: "sonnet" });
+  assert.equal(L.chairArgv({ model: "sonnet" }, {}).bin, "claude", "舊的狀態檔沒有 agent 欄");
+  assert.deepEqual(L.structured({ text: "好的\n```json\n{\"a\":1}\n```" }), { a: 1 });
+  assert.throws(() => L.parseReply("codex", '{"type":"turn.failed","error":{"message":"額度用完"}}'), /額度用完/);
   assert.equal(L.parseReply("claude", 'banner\n{"result":"hi","session_id":"s1"}\n').session, "s1");
   assert.throws(() => L.parseReply("claude", '{"is_error":true,"result":"no"}'), /no/);
 });

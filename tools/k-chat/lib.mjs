@@ -7,6 +7,28 @@ import path from "node:path";
 export const READ_TOOLS = "Read,Grep,Glob,WebFetch,WebSearch";
 export const TAIL = 60000; // characters of the record a prompt carries at most
 
+// Where a member (or the chair) gets its model from: the CLI that is started for it.
+export const SOURCES = {
+  claude: { label: "Claude", bin: "claude", chair: "sonnet" },
+  codex: { label: "Codex", bin: "codex", chair: null },
+  gemini: { label: "Gemini", bin: "agy", chair: null }, // Google's Antigravity CLI
+};
+export function source(name) {
+  const n = String(name || "claude").toLowerCase();
+  const id = n === "agy" ? "gemini" : n === "claude-code" ? "claude" : n;
+  if (!Object.hasOwn(SOURCES, id)) throw new Error(`不認得的模型來源:${name}(有 ${Object.keys(SOURCES).join("、")})`);
+  return id;
+}
+// A model's name as the CLI takes it, null for the CLI's own default. It becomes an argument
+// (on Windows through cmd for an npm-installed CLI), so nothing but a name gets through.
+export function modelName(m) {
+  const t = String(m ?? "").trim();
+  if (!t) return null;
+  if (!/^[A-Za-z0-9][\w.:/@+[\]-]{0,79}$/.test(t)) throw new Error(`模型名字不對:${t}`);
+  return t;
+}
+export const sourceLabel = (x) => `${SOURCES[source(x?.agent)].label}${x?.model ? ` ${x.model}` : ""}`;
+
 const two = (n) => String(n).padStart(2, "0");
 export const clock = (d = new Date()) => `${two(d.getHours())}:${two(d.getMinutes())}`;
 export const day = (d = new Date()) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
@@ -37,14 +59,17 @@ export function members(list, taken = []) {
     if (used.has(name) && m.machine) name = `${name}-${m.machine}`;
     for (let i = 2, base = name; used.has(name); i += 1) name = `${base}-${i}`;
     used.add(name);
-    return { name, space: m.space || name, machine: m.machine || null, cwd: m.cwd, agent: m.agent === "codex" ? "codex" : "claude", session: null, fork: m.fork || null, seen: 0 };
+    const agent = source(m.agent);
+    if (m.fork && agent !== "claude") throw new Error(`成員 ${name}:帶入對話(fork)只支援 Claude`);
+    return { name, space: m.space || name, machine: m.machine || null, cwd: m.cwd, agent, model: modelName(m.model), session: null, fork: m.fork || null, seen: 0 };
   });
 }
 
-export function newState({ repo, topic, title, space, list, chairModel, maxRounds, allowYolo }) {
+export function newState({ repo, topic, title, space, list, chairAgent, chairModel, maxRounds, allowYolo }) {
+  const agent = source(chairAgent);
   return {
     k_chat: 1, topic: slug(topic), title: title || topic, repo, space: space || path.basename(repo),
-    chair: { model: chairModel || "sonnet" }, allow_yolo: allowYolo !== false, max_rounds: Number(maxRounds) > 0 ? Number(maxRounds) : 12,
+    chair: { agent, model: modelName(chairModel) ?? SOURCES[agent].chair }, allow_yolo: allowYolo !== false, max_rounds: Number(maxRounds) > 0 ? Number(maxRounds) : 12,
     round: 0, status: "running", now: { phase: "idle", who: null, since: Date.now() },
     members: members(list), queue: [], todos: [], failures: 0, runner: null,
   };
@@ -53,7 +78,7 @@ export function newState({ repo, topic, title, space, list, chairModel, maxRound
 // The record. Headings are the chat plugin's (porthole's #chat reads "## 🧑 Human" and
 // "## 🤖 Assistant"); who spoke comes after the role.
 export const header = (s, d = new Date()) =>
-  `# Chat: ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${s.chair.model} · 成員:${s.members.map((m) => `${m.name}@${m.space}`).join("、") || "(還沒有)"}\n`;
+  `# Chat: ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
 export const entry = (who, text, d = new Date()) => {
   const head = who === "owner" ? "🧑 Human" : who === "chair" ? "🤖 Assistant · 🪑 主席" : `🤖 Assistant · ${who.name}@${who.space}`;
   // What someone said can't start a new message: its own # and ## headings go down to ###.
@@ -89,7 +114,7 @@ export function parseSay(text, names) {
 }
 
 const tail = (text) => (text.length > TAIL ? `…(前面省略 ${text.length - TAIL} 字)\n${text.slice(-TAIL)}` : text);
-const roster = (s) => s.members.map((m) => `- ${m.name}:Space「${m.space}」,${m.machine ? `機器 ${m.machine}` : "本機"},資料夾 ${m.cwd}(${m.agent === "codex" ? "Codex" : "Claude Code"})`).join("\n");
+const roster = (s) => s.members.map((m) => `- ${m.name}:Space「${m.space}」,${m.machine ? `機器 ${m.machine}` : "本機"},資料夾 ${m.cwd}(${sourceLabel(m)})`).join("\n");
 
 export const CHAIR_SCHEMA = {
   type: "object",
@@ -100,7 +125,7 @@ export const CHAIR_SCHEMA = {
     done: { type: "boolean", description: "討論可以結束了" },
     reason: { type: "string", description: "一句話:為什麼是他、為什麼開 YOLO、或為什麼結束" },
   },
-  required: ["next", "ask", "yolo", "done", "reason"],
+  required: ["next", "ask", "yolo", "done", "reason"], additionalProperties: false,
 };
 export const CONCLUDE_SCHEMA = {
   type: "object",
@@ -108,9 +133,9 @@ export const CONCLUDE_SCHEMA = {
     conclusion: { type: "string", description: "Markdown:決定、還沒談定的、待辦與負責人" },
     todos: { type: "array", items: { type: "object", properties: {
       title: { type: "string" }, repo: { type: "string", description: "負責的成員的 Space / repo 名" }, detail: { type: "string" } },
-      required: ["title", "repo", "detail"] } },
+      required: ["title", "repo", "detail"], additionalProperties: false } },
   },
-  required: ["conclusion", "todos"],
+  required: ["conclusion", "todos"], additionalProperties: false,
 };
 
 export function chairPrompt(s, record) {
@@ -126,7 +151,7 @@ ${roster(s)}
 - 成員預設只能讀(讀檔、搜尋、查網頁)。${s.allow_yolo
     ? "只有在大家已經談定要動手、而且動手的範圍講清楚了,才把 yolo 設成 true:那個成員這一輪可以改檔、跑指令(在他自己的資料夾裡),下一輪就收回。reason 要寫清楚授權的理由。拿不準就不要開。"
     : "Owner 關掉了 YOLO:yolo 一律 false。"}
-- 該談的談完了、或大家開始重複,就 done: true。
+- 該談的談完了、或大家開始重複,就 done: true。done: true 是現在就結束,next 那個人不會再發言;還要他講就先 done: false。
 - 現在是第 ${s.round + 1} 輪,上限 ${s.max_rounds} 輪。
 
 目前的對話紀錄:
@@ -177,39 +202,89 @@ ${turn.yolo ? "\n主席授權你這一輪動手(YOLO):可以改檔、跑指令,�
 }
 
 // The agent's arguments for one turn. Read-only by default; YOLO for that turn only.
+//   Claude: only the reading tools exist. Codex: its read-only sandbox (exec's own flags go before
+//   `resume`, which doesn't take --sandbox). Gemini (agy): has no read-only switch; its default mode
+//   asks before every write and command and, with nobody to ask, refuses them. guard() ends the turn
+//   when it isn't in that mode, or when a write or a command went through anyway.
 export function memberArgv(m, yolo) {
-  if (m.agent === "codex") {
+  const agent = source(m.agent), model = m.model ? ["--model", m.model] : [];
+  if (agent === "codex") {
     const mode = yolo ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", "read-only"];
-    return { bin: "codex", args: m.session ? ["exec", "resume", m.session, "--json", ...mode, "-"] : ["exec", "--json", ...mode, "-"] };
+    return { agent, bin: "codex", args: ["exec", "--json", "--skip-git-repo-check", ...mode, ...model, ...(m.session ? ["resume", m.session] : []), "-"] };
   }
-  const args = ["-p", "--output-format", "json"];
+  if (agent === "gemini") {
+    const mode = yolo ? ["--dangerously-skip-permissions"] : ["--sandbox"];
+    return { agent, bin: "agy", args: [...AGY, ...mode, ...model, ...(m.session ? ["--conversation", m.session] : [])], guard: yolo ? null : guard };
+  }
+  const args = ["-p", "--output-format", "json", ...model];
   if (m.session) args.push("--resume", m.session);
   else if (m.fork) args.push("--resume", m.fork, "--fork-session");
   if (yolo) args.push("--dangerously-skip-permissions");
   else args.push("--tools", READ_TOOLS, "--allowedTools", READ_TOOLS, "--strict-mcp-config");
-  return { bin: "claude", args };
+  return { agent, bin: "claude", args };
 }
-export const chairArgv = (model, schema) =>
-  ({ bin: "claude", args: ["-p", "--output-format", "json", "--model", model, "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--json-schema", JSON.stringify(schema)] });
+// agy reads the prompt on stdin only as stream-json (as an argument, a long record would not fit).
+const AGY = ["--input-format", "stream-json", "--output-format", "stream-json"];
+
+// The chair: no tools (Claude), or nothing it may change. `schemaFile` holds the schema for Codex.
+export function chairArgv(chair, schema, schemaFile) {
+  const agent = source(chair?.agent), model = chair?.model ? ["--model", chair.model] : [];
+  if (agent === "codex") return { agent, bin: "codex", args: ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", ...model, "--output-schema", schemaFile, "-"] };
+  if (agent === "gemini") return { agent, bin: "agy", args: [...AGY, "--sandbox", ...model, "--json-schema", JSON.stringify(schema)], guard };
+  return { agent, bin: "claude", args: ["-p", "--output-format", "json", ...model, "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--json-schema", JSON.stringify(schema)] };
+}
+
+// The prompt as the agent's stdin takes it.
+export const feed = (agent, prompt) => (agent === "gemini" ? `${JSON.stringify({ event: "user", message: { content: prompt } })}\n` : prompt);
+
+const event = (line) => { try { return JSON.parse(line); } catch { return null; } };
+
+// agy's output, line by line, in a read-only turn: why the turn must end, or null.
+const WRITES = /write|replace|edit|create|delete|remove|rename|run_command|send_command|execute|shell/i;
+export function guard(line) {
+  const e = event(line);
+  if (e?.event === "init") {
+    const mode = e.init?.permission_mode;
+    return mode === "request-review" ? null : `agy 不是在「先問再動」的模式(permission_mode: ${mode ?? "?"}),唯讀輪不跑。請把 agy 的 Agent Mode 設成 default`;
+  }
+  const u = e?.event === "step_update" ? e.step_update : null;
+  // A refused call carries an error; one that isn't DONE yet may still be refused.
+  if (u?.step_type === "tool" && u.state === "DONE" && WRITES.test(u.tool_name ?? "") && !u.tool_info?.error) return `唯讀輪裡 agy 跑了 ${u.tool_name},這一輪作廢(請檢查它的資料夾)`;
+  return null;
+}
 
 // What the agent printed, as { text, session, structured }.
 export function parseReply(agent, stdout) {
   const out = String(stdout ?? "").trim();
   if (agent === "codex") {
-    let text = "", session = null;
+    let text = "", session = null, failed = null;
     for (const line of out.split("\n")) {
-      let e; try { e = JSON.parse(line); } catch { continue; }
-      if (e.type === "thread.started" && e.thread_id) session = e.thread_id;
-      if (e.type === "item.completed" && e.item?.type === "agent_message" && e.item.text) text = e.item.text;
+      const e = event(line);
+      if (e?.type === "thread.started" && e.thread_id) session = e.thread_id;
+      if (e?.type === "item.completed" && e.item?.type === "agent_message" && e.item.text) text = e.item.text;
+      if (e?.type === "turn.failed") failed = e.error?.message ?? "turn.failed";
     }
+    if (failed) throw new Error(`Codex:${String(failed).slice(0, 500)}`);
     if (!text) throw new Error(`Codex 沒有回答:${out.slice(-300)}`);
     return { text, session, structured: null };
+  }
+  if (agent === "gemini") {
+    const r = out.split("\n").map(event).filter((e) => e?.event === "result").pop()?.result;
+    if (!r) throw new Error(`讀不懂 agy 的輸出:${out.slice(-300) || "(空的)"}`);
+    if (r.status !== "SUCCESS") throw new Error(`Gemini(agy):${String(r.error || r.status).slice(0, 500)}${/authenticat/i.test(r.error ?? "") ? "(先在那台機器跑一次 agy 登入)" : ""}`);
+    return { text: String(r.response ?? "").trim(), session: r.conversation_id || null, structured: r.structured_output ?? null };
   }
   // Something may be printed before the JSON (a shell banner on another machine): take the last JSON line.
   const line = out.split("\n").reverse().find((l) => l.trim().startsWith("{")) ?? out;
   let r; try { r = JSON.parse(line); } catch { throw new Error(`讀不懂 agent 的輸出:${out.slice(-300) || "(空的)"}`); }
   if (r.is_error) throw new Error(String(r.result || r.subtype || "agent 回報錯誤").slice(0, 500));
   return { text: String(r.result ?? ""), session: r.session_id ?? null, structured: r.structured_output ?? null };
+}
+// A reply that had a schema, as its object (some print it as text, maybe fenced).
+export function structured(r) {
+  if (r.structured) return r.structured;
+  const t = String(r.text ?? ""), from = t.indexOf("{"), to = t.lastIndexOf("}");
+  try { return JSON.parse(t.slice(from, to + 1)); } catch { throw new Error(`主席的回答不是 JSON:${t.slice(0, 200) || "(空的)"}`); }
 }
 
 // The chair's answer made safe: a member that exists, YOLO only when allowed.
