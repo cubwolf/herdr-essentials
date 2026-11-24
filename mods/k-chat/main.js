@@ -1,8 +1,10 @@
 // k-chat (herdr-essentials, ADR 0004): a group discussion among agents from several Spaces,
 // chaired by an agent, hosted by the Owner. This is the window: it shows the record
 // (doc/chat/<topic>.md in the main Space's repo), starts a discussion, invites agents, and
-// carries what the Owner says. The turns themselves are run by tools/k-chat/runner.mjs in a
-// terminal of the main Space, so closing this window (or Herdr) doesn't stop a discussion;
+// carries what the Owner says. A discussion gets a tab of its own in the main Space ("💬 <title>",
+// this mod as its pane), so its row in the sidebar brings the conversation back. The turns
+// themselves are run by tools/k-chat/runner.mjs in a herdr-core terminal that isn't in the
+// sidebar (`runner.mjs start --no-layout`), so closing the tab (or Herdr) doesn't stop a discussion;
 // opening it again reads the same files. Everything it asks of the runner goes through the
 // runner's inbox (`runner.mjs say|invite|set|card`), never into the state file.
 // Open it: a Space's right-click menu → Discussion (k-spaces), or
@@ -43,6 +45,9 @@ export default class Chat extends View {
     this.say.on("submit", (_e, cx) => this.send(this.say.value(), cx));
     this.opening.on("submit", (_e, cx) => this.create(cx));
     if (checking()) return;
+    // A discussion's own tab (props.state) opens on it.
+    const own = props()?.state ?? _p?.state;
+    if (own) this.open(own, cx);
     cx.spawn(async (cx) => { await this.loadTopics(); cx.notify(); });
     // The list is read again every few seconds (spaces arrive after init; discussions get made elsewhere).
     cx.timer.every(4000, (cx) => { if (this.view === "list" && !this.busy) cx.spawn(async (cx) => { await this.loadTopics(); cx.notify(); }); });
@@ -102,10 +107,30 @@ export default class Chat extends View {
 
   // The runner writes its pid and the time every few seconds while it hosts.
   hosted() { return Boolean(this.state?.runner) && Date.now() - (this.state.runner.at ?? 0) < 20000; }
-  host() {
+  // Starts the runner in a herdr-core terminal of its own, out of the sidebar: the discussion's
+  // tab is this view, not the runner's log. (`hc attach kchat-…` shows the log.)
+  async host() {
+    if (!this.statePath) return;
+    const out = JSON.parse((await this.cmd(["start", this.statePath, "--no-layout"])) || "{}");
+    if (out.warning) this.error = out.warning;
+  }
+
+  // A discussion lives in a tab of the main Space ("💬 <title>", this mod as its only pane):
+  // the sidebar's row for it brings the conversation back. Shown if it is there, made if not.
+  pin(path, title) {
     const m = this.main();
-    if (!m || !this.statePath) return;
-    run("tab.new", { space: m.id, name: `chat: ${this.state?.title ?? this.state?.topic ?? ""}`.slice(0, 40), argv: ["node", RUNNER(), "run", this.statePath], focus: false });
+    if (!m) return false;
+    const name = `💬 ${title}`.slice(0, 40);
+    const tab = m.tabs.find((x) => x.name === name);
+    if (tab) run("tab.select", { id: tab.id });
+    else run("tab.new", { space: m.id, name, mod: "k-chat", props: { state: path, space: m.id } });
+    return true;
+  }
+  // From the window (an overlay), a discussion opens in its tab and the window closes; in a tab, in place.
+  go(path, title, cx) {
+    const overlay = props()?.overlay;
+    if (overlay && this.pin(path, title)) { closeOverlay(overlay); return; }
+    this.open(path, cx);
   }
 
   create(cx) {
@@ -119,9 +144,9 @@ export default class Chat extends View {
       const path = await this.cmd(["new", "--repo", m.folder, "--topic", topic, "--title", topic, "--space", m.name, "--members", JSON.stringify(list), "--say", opening,
         "--max-rounds", String(Number(this.rounds.value()) > 0 ? Number(this.rounds.value()) : 12), ...(this.yolo ? [] : ["--no-yolo"])]);
       this.topic.set_value(""); this.opening.set_value("");
-      this.open(path, cx);
-      await this.poll();
-      this.host();
+      this.statePath = path;
+      await this.host();
+      this.go(path, topic, cx);
     });
   }
 
@@ -131,7 +156,7 @@ export default class Chat extends View {
     this.say.set_value("");
     this.act("送出…", cx, async () => {
       await this.cmd(["say", this.statePath, t]);
-      if (!this.hosted()) this.host(); // nobody is hosting (the tab was closed): start it again
+      if (!this.hosted()) await this.host(); // nobody is hosting: start it again
     });
   }
 
@@ -172,7 +197,7 @@ export default class Chat extends View {
           .when(!this.topics.length, (el) => el.child(div().p(10).text_size(12).text_color(t.dim)
             .child(m ? `${m.name} 的 doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來,主席輪流點名。` : "先開一個 Space。")))
           .children(this.topics.map((x, i) => h_flex().id(`k-chat-topic-${i}`).min_h(40).px(10).gap(10).items_center().rounded(7).cursor_pointer().hover((st) => st.bg(t.hover))
-            .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => this.open(x.path, cx))
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => this.go(x.path, x.title, cx))
             .child(div().size(8).flex_none().rounded_full().bg(x.status === "running" ? t.working : x.status === "waiting" ? t.blocked : t.done))
             .child(v_flex().flex_1().min_w(0)
               .child(div().truncate().child(x.title))
@@ -227,7 +252,8 @@ export default class Chat extends View {
         .child(div().size(8).flex_none().rounded_full().bg(!hosted ? t.blocked : active ? t.working : s?.status === "done" ? t.done : t.idle ?? t.dim))
         .child(div().flex_1().min_w(0).truncate().text_color(t.muted).child(status))
         .child(div().flex_none().truncate().text_color(t.dim).child(names.join("、")))
-        .when(Boolean(s) && !hosted, (el) => el.child(button("k-chat-host", "Resume", (_e, cx) => { this.host(); cx.notify(); }, { primary: true, tip: "在主 Space 開一個 tab 接著主持" }))),
+        .when(Boolean(s) && !hosted, (el) => el.child(button("k-chat-host", "Resume", (_e, cx) => this.act("啟動主持程式…", cx, () => this.host()), { primary: true, tip: "在背景接著主持(herdr-core 裡的 terminal,不佔側欄)" })))
+        .when(Boolean(s) && hosted && !active, (el) => el.child(button("k-chat-quit", "Stop host", (_e, cx) => this.act("關閉主持程式…", cx, () => this.cmd(["quit", this.statePath])), { tip: "讓背景的主持程式離開;紀錄留著,之後發言或按 Resume 會再起來" }))),
       this.inviting ? v_flex().flex_none().max_h(220).overflow_y_scrollbar().p(8).border_b(1).border_color(t.border)
         .when(!others.length, (el) => el.child(div().p(6).text_size(12).text_color(t.dim).child("所有 Space 都已經在討論裡。")))
         .children(others.map((sp, i) => tick(`k-chat-inv-${i}`, false, sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`,
