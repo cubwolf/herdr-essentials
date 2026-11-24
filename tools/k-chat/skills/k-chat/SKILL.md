@@ -38,7 +38,7 @@ node ${CLAUDE_PLUGIN_ROOT}/runner.mjs <指令> …
 | `card <state.json> 0,2` | 把結論裡第 0、2 項待辦開成 Tide 卡(要這台有 Tide) |
 | `quit <state.json>` | 主持程式離開(紀錄留著,之後 `start` 接著跑) |
 
-成員 JSON:`{"name": "otter", "space": "otter", "cwd": "/abs/path/otter", "machine": null, "agent": "claude", "model": null}`
+成員 JSON:`{"name": "api", "space": "api", "cwd": "/abs/path/api", "machine": null, "agent": "claude", "model": null}`
 
 - `cwd` 必填,是**那台機器上**的絕對路徑;`machine` 是 `hc machine ls` 裡的名字(本機就不寫);`agent` 是模型來源:`claude`(預設)、`codex`、`gemini`(跑的是 `agy`)。`model` 選填,是那個 CLI 的模型名,不寫就用它的預設;使用者沒指定就不要自己填。
 - `fork`(選填,只有 Claude):一個 Claude Code session 編號。那位成員第一次發言時用 `--resume <fork> --fork-session` 帶著那段對話進來,不影響原本的 session。
