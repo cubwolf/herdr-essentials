@@ -1,2 +1,8 @@
 mods/*/gpui-kit.d.ts
 mods/*/jsconfig.json
+
+# 開發日誌與截圖只留在本機,不進 git(repo 是公開的;Tide #296)
+devlog/
+shots/
+.claude/devlog.json
+.claude/settings.local.json
