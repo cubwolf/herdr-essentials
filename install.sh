@@ -1,5 +1,5 @@
 #!/bin/bash
-# 安裝 herdr-essentials 的 mod 到 Herdr App home,並做一份 k-main layout(= 你的 main,換成 k-tabs / k-spaces)。
+# 安裝 herdr-essentials 的 mod 到 Herdr App home,並做一份 k-main layout(= 你的 main,換成 k-tabs / k-spaces / k-pane …)。
 # 用法:./install.sh            預設 symlink:App home 的 mods/k-* 指到這個 repo,改 repo 即生效,直接 git commit
 #      ./install.sh --copy     複製一份(Windows 沒開 symlink 權限時用);之後改動要重跑才會更新
 #      (預設 home ~/.config/herdr-app;HERDR_APP_HOME 可改)
@@ -72,6 +72,11 @@ fi
 if ! grep -q '"k-files"' "$K"; then
   sed -i.bak -E 's/"mod": *"files"/"mod": "k-files"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-files"' "$K" && echo "layout: k-main 換成 k-files(Markdown 預覽)" || echo "layout: 找不到 files block,k-files 沒換上" >&2
+fi
+# k-pane(terminal 標頭,別的 mod 可以往裡面放東西):換掉內建 pane 標頭。已換成別的標頭就不動。
+if ! grep -q '"k-pane"' "$K"; then
+  sed -i.bak -E 's/"mod": *"pane"/"mod": "k-pane"/g' "$K" && rm -f "$K.bak"
+  grep -q '"k-pane"' "$K" && echo "layout: k-main 的 pane 標頭換成 k-pane" || echo "layout: pane 標頭不是內建的 pane,沒換成 k-pane" >&2
 fi
 # k-pick 的快捷鍵 ctrl-f12(對話框開著時只能用快捷鍵開,點標題列的準心會先關掉對話框)。已綁別的就不動。
 KJ=$H/keys.json

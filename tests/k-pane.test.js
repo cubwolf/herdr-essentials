@@ -1,0 +1,38 @@
+// node --test tests/
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { chipsFor, modsIn, safeUrl } from "../mods/k-pane/core.js";
+
+const layout = { children: [
+  { content: { mod: "cards" } },
+  { children: [{ content: { tab: "active", pane: { header: { content: { mod: "k-pane" } } } } }, { content: { mod: "builds" } }] },
+] };
+
+test("modsIn: blocks and pane headers", () => {
+  assert.deepEqual([...modsIn(layout)].sort(), ["builds", "cards", "k-pane"]);
+  assert.deepEqual([...modsIn(null)], []);
+});
+
+test("chipsFor: every mod's chip for this terminal, only mods in the layout", () => {
+  const given = {
+    cards: { t1: { label: "#1", text: " a\n b ", tag: "DOING", color: "working", url: "http://x.test/1" }, t2: { label: "#2" } },
+    builds: { t1: { tag: "ok" } },
+    gone: { t1: { label: "stale" } },
+  };
+  const chips = chipsFor(given, "t1", modsIn(layout));
+  assert.deepEqual(chips.map((c) => c.by), ["builds", "cards"]);
+  assert.equal(chips[1].text, "a b");
+  assert.equal(chips[1].url, "http://x.test/1");
+  assert.deepEqual(chipsFor(given, "t9", modsIn(layout)), []);
+});
+
+test("chipsFor: anything else in there is ignored", () => {
+  const mods = new Set(["cards"]);
+  for (const given of [null, undefined, "x", [], { cards: null }, { cards: "x" }, { cards: { t1: "x" } }, { cards: { t1: {} } }, { cards: { t1: { label: 5 } } }]) assert.deepEqual(chipsFor(given, "t1", mods), []);
+  assert.deepEqual(chipsFor({ cards: { t1: { label: "a" } } }, null, mods), []);
+});
+
+test("safeUrl: http and https only", () => {
+  assert.equal(safeUrl("https://x.test/a?b=1&c=2#d"), "https://x.test/a?b=1&c=2#d");
+  for (const u of ["file:///etc/passwd", "javascript:alert(1)", "http://x.test/ a", 'http://x.test/"', "", null, 5]) assert.equal(safeUrl(u), null, String(u));
+});
