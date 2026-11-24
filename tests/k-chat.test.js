@@ -227,8 +227,11 @@ test("三種模型來源:成員各用各的、主席可以換,唯讀參數與 se
     assert.deepEqual(a2.args.slice(-3), ["resume", "th-alpha", "-"]);
     assert.equal(of("claude").length, 1);
     const [g1, g2] = of("agy");
-    assert.ok(g1.args.includes("--dangerously-skip-permissions") && !g1.args.includes("--sandbox"));
+    assert.ok(g1.args.includes("--dangerously-skip-permissions") && !g1.args.includes("--sandbox") && !g1.args.includes("--settings"));
     assert.ok(!g2.args.includes("--dangerously-skip-permissions") && g2.args.includes("--sandbox"));
+    const denied = (a) => JSON.parse(a[a.indexOf("--settings") + 1]).permissions.deny;
+    for (const a of [g2.args, L.chairArgv({ agent: "gemini" }, {}).args]) for (const x of ["write_file(*)", "command(*)", "unsandboxed(*)", "mcp(*)"]) assert.ok(denied(a).includes(x), x);
+    assert.ok(!denied(g2.args).includes("read_file(*)") && denied(L.chairArgv({ agent: "gemini" }, {}).args).includes("read_file(*)"), "成員能讀,主席不用");
     assert.deepEqual(g2.args.slice(-2), ["--conversation", "conv-gamma"]);
     assert.equal(g1.via, "hc:laptop");
     assert.match(g1.input, /你被邀請進一場多 agent 討論/);
@@ -246,14 +249,14 @@ test("三種模型來源:成員各用各的、主席可以換,唯讀參數與 se
   } finally { await t.stop(); }
 });
 
-test("Gemini 的唯讀輪:模式不對、真的寫了檔、沒登入,都會停下來並記下", async () => {
+test("Gemini 的唯讀輪:agy 太舊、真的寫了檔、沒登入,都會停下來並記下", async () => {
   const t = setup([], [], (d) => [{ space: "gamma", cwd: d.gamma, agent: "gemini" }]);
   try {
     const turn = async (want) => { t.cli("say", t.state, "@gamma 說說看"); await t.until(String(want), () => want.test(t.md())); };
-    fs.writeFileSync(path.join(t.dirs.fake, "agy-mode"), "auto");
+    t.flag("agy-old", true);
     t.start();
-    await turn(/gamma 這一輪失敗:agy 不是在「先問再動」的模式\(permission_mode: auto\)/);
-    t.flag("agy-mode", false); t.flag("agy-writes", true);
+    await turn(/gamma 這一輪失敗:那台的 agy 太舊\(沒有 --settings\)/);
+    t.flag("agy-old", false); t.flag("agy-writes", true);
     await turn(/gamma 這一輪失敗:唯讀輪裡 agy 跑了 write_to_file/);
     t.flag("agy-writes", false); t.flag("agy-out", true);
     await turn(/gamma 這一輪失敗:Gemini\(agy\):authentication failed or timed out\(先在那台機器跑一次 agy 登入\)/);

@@ -203,9 +203,9 @@ ${turn.yolo ? "\n主席授權你這一輪動手(YOLO):可以改檔、跑指令,�
 
 // The agent's arguments for one turn. Read-only by default; YOLO for that turn only.
 //   Claude: only the reading tools exist. Codex: its read-only sandbox (exec's own flags go before
-//   `resume`, which doesn't take --sandbox). Gemini (agy): has no read-only switch; its default mode
-//   asks before every write and command and, with nobody to ask, refuses them. guard() ends the turn
-//   when it isn't in that mode, or when a write or a command went through anyway.
+//   `resume`, which doesn't take --sandbox). Gemini (agy): deny rules for this run only, which win over
+//   its agent mode (its default one edits files). An agy without --settings refuses to start. guard()
+//   ends the turn when a write or a command went through anyway.
 export function memberArgv(m, yolo) {
   const agent = source(m.agent), model = m.model ? ["--model", m.model] : [];
   if (agent === "codex") {
@@ -213,7 +213,7 @@ export function memberArgv(m, yolo) {
     return { agent, bin: "codex", args: ["exec", "--json", "--skip-git-repo-check", ...mode, ...model, ...(m.session ? ["resume", m.session] : []), "-"] };
   }
   if (agent === "gemini") {
-    const mode = yolo ? ["--dangerously-skip-permissions"] : ["--sandbox"];
+    const mode = yolo ? ["--dangerously-skip-permissions"] : AGY_READ;
     return { agent, bin: "agy", args: [...AGY, ...mode, ...model, ...(m.session ? ["--conversation", m.session] : [])], guard: yolo ? null : guard };
   }
   const args = ["-p", "--output-format", "json", ...model];
@@ -225,12 +225,15 @@ export function memberArgv(m, yolo) {
 }
 // agy reads the prompt on stdin only as stream-json (as an argument, a long record would not fit).
 const AGY = ["--input-format", "stream-json", "--output-format", "stream-json"];
+// Not `"toolPermission":"strict"`: that refuses reading too. Not `"agentMode":""`: that still writes.
+const agyDeny = (...more) => ["--sandbox", "--settings", JSON.stringify({ permissions: { deny: ["write_file(*)", "command(*)", "unsandboxed(*)", "mcp(*)", "execute_url(*)", "download_url(*)", ...more] } })];
+const AGY_READ = agyDeny(), AGY_CHAIR = agyDeny("read_file(*)", "read_url(*)"); // a chair that may read goes through files for minutes
 
-// The chair: no tools (Claude), or nothing it may change. `schemaFile` holds the schema for Codex.
+// The chair: no tools (Claude), nothing it may read or change (Gemini), nothing it may change (Codex). `schemaFile` holds the schema for Codex.
 export function chairArgv(chair, schema, schemaFile) {
   const agent = source(chair?.agent), model = chair?.model ? ["--model", chair.model] : [];
   if (agent === "codex") return { agent, bin: "codex", args: ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", ...model, "--output-schema", schemaFile, "-"] };
-  if (agent === "gemini") return { agent, bin: "agy", args: [...AGY, "--sandbox", ...model, "--json-schema", JSON.stringify(schema)], guard };
+  if (agent === "gemini") return { agent, bin: "agy", args: [...AGY, ...AGY_CHAIR, ...model, "--json-schema", JSON.stringify(schema)], guard };
   return { agent, bin: "claude", args: ["-p", "--output-format", "json", ...model, "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--json-schema", JSON.stringify(schema)] };
 }
 
@@ -239,14 +242,11 @@ export const feed = (agent, prompt) => (agent === "gemini" ? `${JSON.stringify({
 
 const event = (line) => { try { return JSON.parse(line); } catch { return null; } };
 
-// agy's output, line by line, in a read-only turn: why the turn must end, or null.
-const WRITES = /write|replace|edit|create|delete|remove|rename|run_command|send_command|execute|shell/i;
+// agy's output, line by line, in a read-only turn: why the turn must end, or null. (What `init` says
+// about the mode is no help: permission_mode is "request-review" in Auto too.)
+const WRITES = /write|replace|edit|sed_file|create|delete|remove|rename|run_command|run_workflow|notebook|send_command|execute|shell/i;
 export function guard(line) {
   const e = event(line);
-  if (e?.event === "init") {
-    const mode = e.init?.permission_mode;
-    return mode === "request-review" ? null : `agy 不是在「先問再動」的模式(permission_mode: ${mode ?? "?"}),唯讀輪不跑。請把 agy 的 Agent Mode 設成 default`;
-  }
   const u = e?.event === "step_update" ? e.step_update : null;
   // A refused call carries an error; one that isn't DONE yet may still be refused.
   if (u?.step_type === "tool" && u.state === "DONE" && WRITES.test(u.tool_name ?? "") && !u.tool_info?.error) return `唯讀輪裡 agy 跑了 ${u.tool_name},這一輪作廢(請檢查它的資料夾)`;

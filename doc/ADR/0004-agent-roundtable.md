@@ -99,11 +99,14 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 |---|---|---|---|---|---|
 | Claude | `claude -p --output-format json` | 只給讀的工具、不載 MCP | `--dangerously-skip-permissions` | `--resume` | `--json-schema` |
 | Codex | `codex exec --json … -` | `--sandbox read-only` | `--dangerously-bypass-approvals-and-sandbox` | `resume <id>` | `--output-schema <檔>` |
-| Gemini | `agy`,stdin / stdout 都是 `stream-json` | 預設模式 + `--sandbox` + 主持程式盯著 | `--dangerously-skip-permissions` | `--conversation <id>` | `--json-schema` |
+| Gemini | `agy`,stdin / stdout 都是 `stream-json` | `--settings` 帶 deny 規則 + `--sandbox` + 主持程式盯著 | `--dangerously-skip-permissions` | `--conversation <id>` | `--json-schema` |
 
-- **agy 沒有唯讀開關**:`--mode plan` 只是在提示前面加 `/plan`,而且無頭時會自動通過計畫審查,不能當唯讀用。靠的是預設模式「先問再動」:無頭時沒人回答就拒絕。新版(1.5.7 起)預設改成 `auto`,會自動改檔;1.2.9 又不認 `--mode default`,沒有一個參數能在各版本都鎖住。所以主持程式讀它輸出的第一個事件:`permission_mode` 不是 `request-review` 就中止;之後只要看到寫檔 / 跑指令的工具真的成功了,也中止並寫進紀錄。後者是事後發現,擋不掉已經寫下去的那一次。
+- **agy 的唯讀靠 deny 規則**(2026-11-24 用登入的 agy 1.5.16 實測後改):`--settings '{"permissions":{"deny":["write_file(*)","command(*)","unsandboxed(*)","mcp(*)","execute_url(*)","download_url(*)"]}}'`,只對那一次有效,不動使用者的設定檔;Deny 優先於模式與 Allow。實測:寫檔、改檔、跑指令、`run_workflow`、子代理都被拒,讀檔正常、有回答;YOLO 輪之後接續同一個對話,唯讀輪照樣被拒。
+  - 不能用的:預設(auto)會寫檔跑指令;`"agentMode":""` 仍會在工作資料夾寫檔;`"toolPermission":"strict"` 連讀都拒、沒有回答;`--mode plan` 無頭時自動通過審查。
+  - **第一版的防護是錯的**:以為 `init.permission_mode` 不是 `request-review` 就知道模式不對,其實 auto 也報 `request-review`,等於沒擋;已拿掉。
+  - 沒有 `--settings` 的舊版 agy 會因不認得旗標而不跑(錯誤寫「太舊」)。主持程式仍盯輸出,看到寫檔 / 跑指令的工具成功就中止並記紀錄(最後一道,事後發現)。
 - **agy 的提示走 stdin**(`--input-format stream-json`):紀錄最多 6 萬字,放在參數裡會超過上限。
-- **Codex / Gemini 當主席時在一個空的暫存資料夾裡跑**:它們沒有「不給工具」的參數。
+- **Codex / Gemini 當主席時在一個空的暫存資料夾裡跑**:它們沒有「不給工具」的參數。Gemini 主席另外把讀檔 / 讀網頁也 deny(實測:讓它能讀,它會自己去翻檔,一次決定花了 224 秒),提示也直說不要用工具。
 - **修掉一個錯**:`codex exec resume` 不收 `--sandbox`(只有 `--model`、`--json` 這類是全域參數),第一版把它放在 `resume` 後面;現在放前面。
 - **模型名只收英數與 `._-:/@+[]`**,開頭要是英數:它會變成程式參數。
 
@@ -117,7 +120,7 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 
 - 帶入 tab 的對話(`--resume <tab 的 session> --fork-session`):主持程式支援(成員 JSON 的 `fork` 欄),mod 的邀請畫面還沒有 —— mod 拿不到某個 tab 的 session 編號。
 - Codex:參數照官方文件與原始碼寫,back 和 laptop 都沒裝,沒實測。Windows 上 npm 裝的 `codex.cmd` 會經過 cmd 啟動,也沒實測;別台 Windows 的 Codex 成員(`hc exec`)不確定叫不叫得起 `.cmd`。
-- Gemini(agy):back 裝了 1.2.9 但沒登入,只驗到「沒登入時的錯誤」;正常回答、唯讀輪真的會拒絕寫檔、`permission_mode` 的值,都只依官方文件、用假的 agy 測過。
+- Gemini(agy):Linux 的 1.5.16 實測過(見「模型來源」)。沒測:Windows 與經 `hc exec` 到別台(`--settings` 的 JSON 引號);讀網頁的工具(`read_url`)在無頭時的行為。
 - 主 Space 要在跑 Herdr App 的那台機器上(mod 只能在本機寫檔、起程式);成員可以在別台。
 - 別台機器的成員走 `hc exec`,一輪最多 10 分鐘(本機 15 分鐘、YOLO 30 分鐘)。
 - plugin 的指令(`/k-chat:new` 等)還沒在真的 Claude Code session 裡裝起來跑過;`claude plugin validate` 過了,`start` 在測試環境的 core 實跑過。

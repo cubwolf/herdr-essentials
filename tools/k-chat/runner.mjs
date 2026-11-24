@@ -96,6 +96,7 @@ async function agent(spec, opts) {
   if (r.stopped) throw new Stopped();
   if (r.over) throw new Error(`超過 ${Math.round(opts.timeout / 60000)} 分鐘沒講完`);
   if (r.broke) throw new Error(r.broke);
+  if (/not defined: -settings/.test(r.stderr)) throw new Error("那台的 agy 太舊(沒有 --settings),唯讀輪不跑。請更新 agy");
   try { return L.parseReply(spec.agent, r.stdout); }
   catch (e) { throw new Error(r.code !== 0 ? `${e.message}${r.stderr.trim() ? ` · ${r.stderr.trim().slice(-300)}` : ""}` : e.message); }
 }
@@ -127,7 +128,7 @@ function host(statePath) {
       cwd = desk ??= fs.mkdtempSync(path.join(os.tmpdir(), "k-chat-chair-"));
       fs.writeFileSync(file = path.join(cwd, "schema.json"), JSON.stringify(schema));
     }
-    return L.structured(await agent(L.chairArgv(s.chair, schema, file), { cwd, input: prompt, timeout: 5 * 60000, stop: stopAsked }));
+    return L.structured(await agent(L.chairArgv(s.chair, schema, file), { cwd, input: L.source(s.chair.agent) === "claude" ? prompt : `${prompt}\n\n只根據上面的內容直接回答,不要使用任何工具。`, timeout: 5 * 60000, stop: stopAsked }));
   };
 
   const pulse = setInterval(beat, 5000);
