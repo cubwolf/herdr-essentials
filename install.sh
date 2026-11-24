@@ -84,4 +84,19 @@ if [ -e "$KJ" ]; then
 else
   echo "keys: 還沒有 keys.json(用內建預設),k-pick 沒加快捷鍵:先在 Settings 改一個快捷鍵讓它產生再重跑" >&2
 fi
+# Claude Code 的 statusLine 回報器:把模型、強度寫成 terminal 標籤,k-agents 的 Agents 列換 icon / 底色。
+# 只在 ~/.claude/settings.json 還沒有 statusLine 時加;已有別的就不動,只提醒。要 node 改 JSON。
+SL="$HERE/tools/statusline/herdr-statusline.sh"
+command -v cygpath >/dev/null && SL=$(cygpath -m "$SL")
+CS="$HOME/.claude/settings.json"
+if ! command -v node >/dev/null; then echo "statusline: 沒有 node,沒加 Claude Code statusLine(Agents 列不會顯示模型 / 強度)" >&2
+else
+  CS="$CS" SL="$SL" node -e '
+    const fs = require("fs"), f = process.env.CS, cmd = `sh "${process.env.SL}"`;
+    let s = {}; try { s = JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { if (e.code !== "ENOENT") { console.error("statusline: settings.json 讀不懂,沒動"); process.exit(0); } }
+    const now = s.statusLine?.command ?? "";
+    if (now.includes("herdr-statusline.sh")) { if (now !== cmd) { s.statusLine = { ...s.statusLine, command: cmd }; fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n"); console.log("statusline: 路徑更新"); } }
+    else if (s.statusLine) console.error("statusline: Claude Code 已有別的 statusLine,沒換;要顯示模型 / 強度,在它裡面呼叫 " + cmd + "(把 stdin 轉給它)");
+    else { fs.mkdirSync(require("path").dirname(f), { recursive: true }); s.statusLine = { type: "command", command: cmd }; fs.writeFileSync(f, JSON.stringify(s, null, 2) + "\n"); console.log("statusline: Claude Code 加上 herdr-statusline(Agents 列顯示模型 / 強度,新開的 session 生效)"); }'
+fi
 command -v herdr-app >/dev/null && for m in "$HERE"/mods/*/; do herdr-app check "$H/mods/$(basename "$m")" 2>&1 | grep -v libEGL; done

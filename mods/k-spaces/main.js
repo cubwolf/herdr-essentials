@@ -8,7 +8,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, props } from "herdr";
+import { spaces, machines, panes, agents, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, props } from "herdr";
 import RepoMenu from "./repos.js";
 import AgentMenu from "./agents.js";
 import KMenu, { hidden } from "./menu.js";
@@ -584,9 +584,18 @@ export default class Spaces extends View {
     const w = r.w;
     if (!this.tabsOpen.has(w.id)) return this.row(r, t);
     const ps = panes();
+    // The same name as its agent's row in k-agents: what another mod gave it in shared
+    // "k-agents.rows" (kirin-tide: "<card>-<title>"), else the tab's own name.
+    const given = shared("k-agents.rows");
+    const rowName = (pane) => {
+      if (!pane || !given || typeof given !== "object") return null;
+      const a = agents().find(x => x.pane === pane.pane);
+      const n = a ? given[a.address]?.name : null;
+      return typeof n === "string" && n.trim() ? n.trim() : null;
+    };
     const tabRow = (c) => {
       const lead = ps.find(p => p.tab === c.id && p.program?.agent) ?? ps.find(p => p.tab === c.id);
-      const name = c.named ? c.name : (lead?.program?.name ?? c.name);
+      const name = rowName(lead) ?? (c.named ? c.name : (lead?.program?.name ?? c.name));
       const shown = w.active && c.active;
       const marked = this.cursor === c.id;
       return h_flex().id(`tab-${c.id}`).h(24).flex_none().pl(55).pr(4).gap(6).items_center().rounded(6).text_size(12)
