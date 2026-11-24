@@ -1,6 +1,6 @@
 # ADR 0002:浮動筆記(k-note)
 
-- 狀態:Proposed
+- 狀態:Proposed(階段 B 已由 [ADR 0005](0005-k-float.md) 取代:2026-11-24 範圍擴大成給所有 mod 用的桌面浮動視窗 SDK,筆記是第一個用例;階段 A 仍照本篇)
 - 日期:2026-11-23
 - 相關:`openOverlay`(`herdr.d.ts` 的 `OverlaySpec`)、`exec`、`writeTextFile` / `watchFolder`
 
