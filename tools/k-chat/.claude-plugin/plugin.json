@@ -4,5 +4,5 @@
   "description": "多 agent 討論群(主席制):從 Claude Code 開一場討論、邀別的資料夾 / 別台機器的 agent 進來、替 Owner 發言。主席每輪決定誰發言、何時准許某個成員動手(YOLO);紀錄存在主 repo 的 doc/chat/。搭配 Herdr App 的 mod k-chat(herdr-essentials)。",
   "author": { "name": "Kirin" },
   "homepage": "https://github.com/kirinchen/herdr-essentials",
-  "license": "MIT"
+  "license": "Apache-2.0"
 }
