@@ -27,6 +27,9 @@ public class KFloatWin {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
   public struct RECT { public int L, T, R, B; }
 }
 "@
@@ -38,15 +41,26 @@ $s = @{ title = "k-float-smoke"; x = 160; y = 160; width = 300; height = 170; ht
 spec $s
 
 $front = [KFloatWin]::GetForegroundWindow()
+$sw = [Diagnostics.Stopwatch]::StartNew()
 $r = & $Bin start $D
+$sw.Stop()
 check "start ($r)" ($r -like "started*")
+# Reading its output above ends when nothing holds that pipe any more: the helper must not.
+check ("start returned in {0:n1} s" -f $sw.Elapsed.TotalSeconds) ($sw.Elapsed.TotalSeconds -lt 8)
 Start-Sleep -Seconds 5
 check "second start is a no-op" ((& $Bin start $D) -eq "running")
 has "ready event" '"type":"ready"'
 has "page got the first data and answered" '"data":{"got":1}'
 check "window exists and is visible" ((win) -ne [IntPtr]::Zero -and [KFloatWin]::IsWindowVisible((win)))
 check "always on top (WS_EX_TOPMOST)" (((exstyle) -band 0x8) -ne 0)
-check "did not take the foreground" ([KFloatWin]::GetForegroundWindow() -eq $front)
+# Anything of ours in front is the failure (the window, or a console the helper was started in);
+# the person switching between other windows meanwhile is not.
+$now = [KFloatWin]::GetForegroundWindow()
+$owner = [uint32]0; [void][KFloatWin]::GetWindowThreadProcessId($now, [ref]$owner)
+$name = (Get-Process -Id $owner -ErrorAction SilentlyContinue).ProcessName
+$sb = New-Object Text.StringBuilder 256; [void][KFloatWin]::GetClassName($now, $sb, 256); $class = "$sb"
+[void]$sb.Clear(); [void][KFloatWin]::GetWindowText($now, $sb, 256)
+check "did not take the foreground (same as before: $($now -eq $front); in front: $name / $class)" ($now -eq $front -or ($now -ne (win) -and $name -ne "k-float" -and "$sb" -notlike "*k-float*"))
 $rect = New-Object KFloatWin+RECT
 [void][KFloatWin]::GetWindowRect((win), [ref]$rect)
 Write-Output ("     window rect: {0},{1} {2}x{3}" -f $rect.L, $rect.T, ($rect.R - $rect.L), ($rect.B - $rect.T))

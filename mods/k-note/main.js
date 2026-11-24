@@ -9,7 +9,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, props, closeOverlay, appHome, readTextFile, writeTextFile, watchFolder, checking } from "herdr";
 import * as fs from "fs/promises";
-import { float } from "./float.js";   // a copy of mods/k-float/float.js (a mod can only import from its own folder); tests/k-float.test.js keeps them equal
+import { float, sleep } from "./float.js";   // a copy of mods/k-float/float.js (a mod can only import from its own folder); tests/k-float.test.js keeps them equal
 
 const ID = "k-note";
 const folder = () => `${appHome().replace(/[\\/]+$/, "")}/data/k-note`;
@@ -56,10 +56,14 @@ export default class Note extends View {
       cx.notify();
       // The file changed (an agent, a script, an editor): show it.
       for (;;) {
-        const changed = watchFolder(folder());
-        await this.load();
-        cx.notify();
-        await changed;
+        const began = Date.now();
+        try {
+          const changed = watchFolder(folder());
+          await this.load();
+          cx.notify();
+          await changed;
+        } catch (e) { this.error = String(e?.message ?? e); cx.notify(); }
+        if (Date.now() - began < 100) await sleep(cx, 500); // a watch that can't wait must not become a busy loop
       }
     });
   }

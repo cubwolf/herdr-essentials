@@ -168,6 +168,10 @@ fn start(dir: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // A child inherits every inheritable handle, not just the three it is given: holding our
+        // stdout would keep whoever ran `start` waiting for its end until the helper exits
+        // (Herdr's exec did, 2026-11-24: 30 s, past its own timeout).
+        no_inherit();
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
@@ -184,12 +188,14 @@ fn start(dir: &Path) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let quoted = |p: &Path| p.display().to_string().replace('\'', "''");
         let script = format!(
-            "(Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='\"{}\" run \"{}\"'}}).ReturnValue",
+            // CreateFlags 8 (DETACHED_PROCESS), ShowWindow 0: no console window in front of the person.
+            "$s = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{{CreateFlags=[uint32]8; ShowWindow=[uint16]0}}; (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='\"{}\" run \"{}\"'; ProcessStartupInformation=$s}}).ReturnValue",
             quoted(&exe),
             quoted(dir)
         );
         let out = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| format!("can't start the helper (powershell): {e}"))?;
@@ -205,6 +211,22 @@ fn start(dir: &Path) -> Result<(), String> {
         child.spawn().map_err(|e| format!("can't start the helper: {e}"))?;
         println!("started");
         Ok(())
+    }
+}
+
+/// Keeps this process's stdin, stdout and stderr from being inherited by what it starts.
+#[cfg(windows)]
+fn no_inherit() {
+    use std::os::windows::io::{AsRawHandle, RawHandle};
+    const HANDLE_FLAG_INHERIT: u32 = 1;
+    extern "system" {
+        fn SetHandleInformation(handle: RawHandle, mask: u32, flags: u32) -> i32;
+    }
+    for handle in [std::io::stdin().as_raw_handle(), std::io::stdout().as_raw_handle(), std::io::stderr().as_raw_handle()] {
+        if !handle.is_null() {
+            // SAFETY: a handle this process owns; a bad one only makes the call fail.
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) };
+        }
     }
 }
 
