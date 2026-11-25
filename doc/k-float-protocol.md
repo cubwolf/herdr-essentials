@@ -30,6 +30,7 @@ rm $D/windows/hello.json          # 關視窗
 | `helper.lock` | 輔助程式 | 正在跑的那支的 `pid` 與 `version`;同一個資料夾只會有一支 |
 | `helper.log` | 輔助程式 | 輔助程式的錯誤輸出 |
 | `stop` | `k-float stop` | 出現就請輔助程式結束 |
+| `paused` | `install.sh` | 重建輔助程式期間放著:`start` 不起新的(印 `paused`),免得 Windows 換不掉執行中的檔。超過 15 分鐘的當成沒有 |
 | `webview/` | 輔助程式 | 系統 webview 的資料,不用管 |
 
 `<id>`:1 到 64 個字,只能有英數字、`.`、`_`、`-`。其他檔名會被略過。
@@ -51,6 +52,8 @@ k-float --version
 - 檔案開頭帶 BOM 也收(Windows PowerShell 5 的 `Set-Content -Encoding UTF8` 會加)。
 - Windows 上,`start` 起的那支不會跟著呼叫它的程式一起被收掉(`hc exec`、mod 的 `exec` 結束時會收掉自己起的所有程序):先試著脫離呼叫者的工作群組,不被允許就請 Windows 代為啟動(WMI)。
 - 視窗出現時不搶鍵盤焦點;點它才會拿到。
+- 看不到的位置不照用:寬或高小於 20,改成預設 320 × 240;視窗不在任何一個螢幕上(例如 Windows 縮小時的停放位置 -32000,125% 縮放下是 -25600;拔掉的螢幕),移到主螢幕正中間。改了就寫回 spec,並記一筆 `moved` / `resized`。
+- 輔助程式被收掉時(`install.sh` 重建、當掉),視窗跟著不見,spec 檔留著。`install.sh` 建完會再 `start` 一次;mod 用 SDK 的 `float.listen` 時,SDK 每分鐘看一次:spec 還在就 `start`。
 
 ## spec:`windows/<id>.json`
 

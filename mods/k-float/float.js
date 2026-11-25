@@ -37,6 +37,9 @@ async function read(path) {
   try { return (await fs.exists(path)) ? await fs.readFile(path, "utf8") : null; } catch { return null; }
 }
 
+/** How often listen() makes sure the helper runs while its window is meant to be open. */
+const ALIVE_MS = 60000;
+
 // Starts the helper unless it runs already; it leaves by itself 30 seconds after its last window.
 async function start() {
   let r;
@@ -117,6 +120,7 @@ export const float = {
     check(id);
     return cx.spawn(async (cx) => {
       let last = null;
+      let beat = null; // one timer at a time, however many events come in between
       for (;;) {
         const began = Date.now();
         let fresh = [];
@@ -130,7 +134,15 @@ export const float = {
           if (end < last) last = 0; // the file was started over
           fresh = all.filter((e) => e.seq > last);
           if (fresh.length) { last = end; changed.cancel(); }
-          else await changed;
+          else {
+            beat ??= sleep(cx, ALIVE_MS).then(() => { beat = null; return "beat"; });
+            if ((await Promise.race([changed, beat])) === "beat") {
+              changed.cancel();
+              // The helper can end while the window is meant to be open (stopped to be rebuilt, a
+              // crash): start it again. A no-op while it runs, and while install.sh rebuilds it.
+              if (await fs.exists(specPath(id))) await start();
+            }
+          }
         } catch (err) { console.log(`k-float: ${id} listen: ${err?.message ?? err}`); }
         for (const e of fresh) { try { await handler(e, cx); } catch (err) { console.log(`k-float: ${id} handler: ${err?.message ?? err}`); } }
         if (fresh.length) cx.notify();
