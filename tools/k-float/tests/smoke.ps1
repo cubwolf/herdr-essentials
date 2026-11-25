@@ -1,5 +1,5 @@
 # Smoke test for the helper on Windows (the counterpart of smoke.sh). It opens one small always-on-top
-# window on the desktop for about 15 seconds: no mouse or keyboard input is sent, nothing is brought to the front.
+# window on the desktop for about 25 seconds: no mouse or keyboard input is sent, nothing is brought to the front.
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\k-float\tests\smoke.ps1 [-Bin <k-float.exe>] [-Shot <file.png>]
 # Run it in the interactive desktop session (a terminal there, or `hc exec --on <machine>`); not over ssh.
 param(
@@ -31,7 +31,10 @@ public class KFloatWin {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   public struct RECT { public int L, T, R, B; }
+  public struct POINT { public int X, Y; }
 }
 "@
 function win { [KFloatWin]::FindWindow([NullString]::Value, "k-float-smoke") }   # $null would arrive as "", which matches no window class
@@ -104,6 +107,56 @@ $s.clickThrough = $false; spec $s
 Start-Sleep -Milliseconds 1200
 check "opacity kept with click-through off again (alpha $(alpha))" ((alpha) -eq 153)
 check "no warning about click-through or opacity" (-not (events | Where-Object { $_.Contains('"type":"warning"') }))
+
+# Collapse to a button and back, from the spec (no mouse or keyboard input is sent, so the page's
+# float.collapse() / a click on the button / dragging it are NOT exercised here: do those by hand).
+# Without the system's frame, as kirin-inbox has it: the window is the page and nothing else.
+function r { $q = New-Object KFloatWin+RECT; [void][KFloatWin]::GetWindowRect((win), [ref]$q); $q }
+function onDisk { Get-Content "$D\windows\demo.json" -Raw -Encoding UTF8 | ConvertFrom-Json }
+function desc($q) { "{0},{1} {2}x{3}" -f $q.L, $q.T, ($q.R - $q.L), ($q.B - $q.T) }
+$s.frame = $false; spec $s
+Start-Sleep -Milliseconds 1500
+$full = r
+$scale = [KFloatWin]::GetDpiForWindow((win)) / 96.0
+$side = [int][Math]::Round(44 * $scale)
+Write-Output ("     scale {0:p0}; expanded, no frame: {1}" -f $scale, (desc $full))
+$resized = @(events | Where-Object { $_.Contains('"type":"resized"') }).Count
+$s.collapsed = $true; $s.collapsedWidth = 44; $s.collapsedHeight = 44; spec $s
+Start-Sleep -Milliseconds 1500
+$small = r
+# The point of the size limits set while collapsed: Windows' own smallest window is wider than this.
+check "collapsed to 44 x 44 logical = $side px (window: $(desc $small))" ([Math]::Abs(($small.R - $small.L) - $side) -le 2 -and [Math]::Abs(($small.B - $small.T) - $side) -le 2)
+check "collapsed at the top-right corner (right $($small.R) / $($full.R), top $($small.T) / $($full.T))" ([Math]::Abs($small.R - $full.R) -le 2 -and [Math]::Abs($small.T - $full.T) -le 2)
+check "opacity kept while collapsed (alpha $(alpha))" ((alpha) -eq 153)
+Start-Sleep -Milliseconds 800
+$now = onDisk
+check "spec keeps the expanded size while collapsed ($($now.width) x $($now.height), collapsed $($now.collapsed))" ($now.collapsed -eq $true -and $now.width -eq 300 -and $now.height -eq 170)
+check "no resized event for collapsing" (@(events | Where-Object { $_.Contains('"type":"resized"') }).Count -eq $resized)
+# Expand: the place in the file is the button's now, so read it back before writing (as a mod does).
+$s.x = $now.x; $s.y = $now.y; $s.collapsed = $false; spec $s
+Start-Sleep -Milliseconds 1500
+$back = r
+check "expanded to the size and place it had ($(desc $back); was $(desc $full))" ([Math]::Abs($back.L - $full.L) -le 2 -and [Math]::Abs($back.T - $full.T) -le 2 -and [Math]::Abs($back.R - $full.R) -le 2 -and [Math]::Abs($back.B - $full.B) -le 2)
+check "opacity kept after expanding (alpha $(alpha))" ((alpha) -eq 153)
+Start-Sleep -Milliseconds 800
+$now = onDisk
+check "spec after expanding ($($now.width) x $($now.height), collapsed $($now.collapsed))" ($now.collapsed -eq $false -and $now.width -eq 300 -and $now.height -eq 170)
+check "no resized event for expanding" (@(events | Where-Object { $_.Contains('"type":"resized"') }).Count -eq $resized)
+
+# hoverOpacity: the mouse is not moved here, so only the case it happens to be in is checked.
+$s.x = $now.x; $s.y = $now.y; $s.hoverOpacity = 1; spec $s
+Start-Sleep -Milliseconds 1200
+$q = r; $pt = New-Object KFloatWin+POINT; [void][KFloatWin]::GetCursorPos([ref]$pt)
+$a = alpha
+if ($pt.X -ge $q.L -and $pt.X -lt $q.R -and $pt.Y -ge $q.T -and $pt.Y -lt $q.B) {
+  # 255 with the mouse on it; 153 if another window lies between the mouse and it.
+  check "hoverOpacity: the mouse is inside the window's rectangle (alpha $a; 255 = hovered, 153 = something is in front)" ($a -eq 255 -or $a -eq 153)
+} else {
+  check "hoverOpacity: the mouse is elsewhere, the window keeps its opacity (alpha $a)" ($a -eq 153)
+  Write-Output "     NOT checked: opaque with the mouse over it (move the mouse onto the window by hand and watch)"
+}
+check "no reload for any of this" (@(events | Where-Object { $_.Contains('"type":"ready"') }).Count -eq 1)
+check "still no warning" (-not (events | Where-Object { $_.Contains('"type":"warning"') }))
 
 Remove-Item "$D\windows\demo.json"
 Start-Sleep -Milliseconds 1200

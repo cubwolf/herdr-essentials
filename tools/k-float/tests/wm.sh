@@ -1,6 +1,6 @@
 #!/bin/bash
 # 要視窗管理員才驗得到的:用底下的視窗時變透明、取得焦點不透明、沒有標題列(頁面拖曳 / 改大小 / 自己的關閉縮小鈕)、
-# 縮小後從 spec 叫回來。自己開一個 Xvfb + marco(開合成器),不碰實體桌面 :0 與測試環境 :99。
+# 縮小後從 spec 叫回來、滑鼠在上面時不透明(hoverOpacity)、收合成按鈕 / 拖按鈕 / 點一下還原 / 收合後重開輔助程式。自己開一個 Xvfb + marco(開合成器),不碰實體桌面 :0 與測試環境 :99。
 # 用法:tools/k-float/tests/wm.sh [截圖檔名前綴]     (先 cargo build --release;要 python3-xlib、marco)
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)

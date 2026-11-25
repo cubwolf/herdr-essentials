@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What needs a window manager: see-through while the person works in a window under it, opaque with
 the focus, no title bar (drag / resize from the page, its own close and minimize), and minimize /
-bring back. Run by wm.sh, which starts a private Xvfb + marco (compositing on) and sets DISPLAY.
+bring back; opaque under the mouse (hoverOpacity), collapse to a button and back. Run by wm.sh, which starts a private Xvfb + marco (compositing on) and sets DISPLAY.
 
     wm.py <k-float binary> [screenshot-prefix]
 """
@@ -263,7 +263,211 @@ if parked:
     check("moved event with the new place", any(e["type"] == "moved" and e["x"] >= 0 for e in pe))
 os.remove(f"{D}/windows/parked.json")
 
-# 10. While install.sh rebuilds the helper (paused), start doesn't start one.
+# 10. hoverOpacity and collapse-to-a-button (what kirin-inbox uses). A second window, "box":
+#     see-through, opaque under the mouse; its "c" button collapses it to 44x44, the button expands it.
+def bev():
+    try:
+        return [json.loads(l) for l in open(f"{D}/events/box.jsonl") if l.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def btypes(): return [e["type"] for e in bev()]
+
+
+def bspec(): return json.load(open(f"{D}/windows/box.json"))
+
+
+def bwrite(s):
+    json.dump(s, open(f"{D}/windows/box.json.tmp", "w"))
+    os.replace(f"{D}/windows/box.json.tmp", f"{D}/windows/box.json")
+
+
+def said(v): return sum(1 for e in bev() if e["type"] == "message" and e["data"] == {"collapsed": v})
+
+
+def rect(w):
+    x, y = place(w)
+    g = w.get_geometry()
+    return x, y, g.width, g.height
+
+
+def near(a, b, tol=3): return all(abs(p - q) <= tol for p, q in zip(a, b))
+
+
+def see(m, want, secs=2.0):
+    """The box's opacity becomes `want` (the message shows what it was in the end)."""
+    r = wait(lambda: opacity(box) == want, secs)
+    check(f"{m} ({opacity(box)}, expected {want})", r)
+
+
+box_page = ("<!doctype html><style>html,body{margin:0;height:100%;background:#dff3e4;overflow:hidden;font:13px sans-serif}"
+            "#bar{height:24px;background:#9ccfa8}#btn{display:none;width:100%;height:100%;border:0;background:#c0392b;color:#fff}"
+            "html[data-float-collapsed] #full{display:none}html[data-float-collapsed] #btn{display:block}</style>"
+            "<div id=full><div id=bar data-float-drag><button id=c>c</button></div>inbox</div>"
+            "<button id=btn data-float-drag-click>3</button>"
+            "<script>c.onclick=()=>float.collapse({width:44,height:44});btn.onclick=()=>float.expand();"
+            "float.onCollapsed(v=>float.send({collapsed:v}))</script>")
+AWAY = (1100, 720)
+mouse(*AWAY)
+move_resize(under, 40, 40, 700, 460)
+bwrite({"title": "wm-box", "x": 300, "y": 200, "width": 320, "height": 220, "html": box_page, "frame": False,
+        "opacity": 0.8, "behindOpacity": 0.35, "hoverOpacity": 1})
+subprocess.run([BIN, "start", D], env=env, capture_output=True)   # no-op if the helper is still there
+check("box: ready", wait(lambda: "ready" in btypes(), 8))
+wait(lambda: find("wm-box") is not None)
+box = find("wm-box")
+check("box: window exists", box is not None)
+if box is None:
+    print(open(f"{D}/helper.log").read() if os.path.exists(f"{D}/helper.log") else "")
+    sys.exit(1)
+check(f"box: page told it is expanded ({said(False)}x)", wait(lambda: said(False) == 1))
+activate(under)
+wait(lambda: active() == under.id)
+see("hover: mouse away, working in the window under it: behindOpacity", 0.35, 4)
+quiet = len(bev())
+
+# The mouse comes over it; the box doesn't get the focus.
+mouse(460, 330)
+see("hover: mouse over it -> hoverOpacity", 1.0)
+check("hover: ... without the focus (the window under it is still the active one)", active() == under.id)
+shot("hover")
+mouse(*AWAY)
+see("hover: mouse left -> back to behindOpacity", 0.35)
+# The active window moves away: plain opacity when not hovered, hoverOpacity when hovered.
+move_resize(under, 900, 560, 250, 120)
+see("hover: not behind, mouse away -> opacity", 0.8, 4)
+mouse(460, 330)
+see("hover: not behind, mouse over -> hoverOpacity", 1.0, 2)
+# Out and straight back in: stays as it is (no flicker).
+seen = set()
+mouse(*AWAY); time.sleep(0.06); mouse(460, 330)
+end = time.time() + 0.6
+while time.time() < end:
+    seen.add(opacity(box)); time.sleep(0.02)
+check(f"hover: out and back in at once doesn't flicker (opacities seen: {sorted(seen)})", seen == {1.0})
+# Crossing it many times: no events, no reload.
+for i in range(12):
+    mouse(*(AWAY if i % 2 else (460, 330))); time.sleep(0.12)
+mouse(*AWAY)
+see("hover: mouse left again", 0.8, 2)
+check(f"hover: no events written, page not reloaded ({len(bev()) - quiet} new)", len(bev()) == quiet and btypes().count("ready") == 1)
+
+# Collapse from the page: 44x44 at the window's top-right corner; width / height in the spec stay.
+mouse(312, 212, press=True, release=True)   # "c"
+check("collapse: collapsed event", wait(lambda: "collapsed" in btypes()))
+r = wait(lambda: near(rect(box), (576, 200, 44, 44)))
+check(f"collapse: 44x44 at the old top-right corner ({rect(box)}; expected 576,200 44x44)", r)
+time.sleep(1.2)   # past settle: a resize of ours must not be taken for the person's
+s = bspec()
+check(f"collapse: spec collapsed, expanded size kept ({s.get('collapsed')}, {s.get('width')}x{s.get('height')}, at {s.get('x')},{s.get('y')})",
+      s.get("collapsed") is True and (s["width"], s["height"]) == (320, 220) and near((s["x"], s["y"]), (576, 200)))
+check("collapse: no resized event", "resized" not in btypes())
+check(f"collapse: page told ({said(True)}x)", said(True) == 1)
+see("collapse: mouse is where the window was, not on the button: not hovered", 0.8, 2)
+shot("collapsed")
+mouse(598, 222)
+see("collapse: mouse on the button -> hoverOpacity", 1.0, 2)
+
+# Drag the button from its corner: it moves (no resize, no click).
+# (The window starts to follow once the mouse has gone 4 px: it ends up to one step, 6,5 here, short.)
+drag(617, 241, 677, 291)
+r = wait(lambda: near(rect(box), (633, 247, 44, 44), 4))
+check(f"button: dragging moves it ({rect(box)}; expected about 636,250 44x44)", r)
+BX, BY = place(box)
+check("button: moved event, spec has the new place", wait(lambda: "moved" in btypes() and near((bspec()["x"], bspec()["y"]), (BX, BY))))
+time.sleep(0.8)
+s = bspec()
+check(f"button: the drag was not a click, and no edge resized it ({s.get('collapsed')}, {s['width']}x{s['height']}, {btypes().count('expanded')} expanded, {btypes().count('resized')} resized)",
+      s.get("collapsed") is True and (s["width"], s["height"]) == (320, 220) and "expanded" not in btypes() and "resized" not in btypes())
+
+# The helper restarts: still a button, at the same place, and the page knows.
+subprocess.run([BIN, "stop", D], env=env)
+check("restart: window gone with the helper", wait(lambda: find("wm-box") is None))
+time.sleep(0.6)
+out = subprocess.run([BIN, "start", D], env=env, capture_output=True, text=True).stdout.strip()
+check(f"restart: started ({out})", out == "started")
+wait(lambda: find("wm-box") is not None, 8)
+box = find("wm-box")
+check("restart: window is back", box is not None)
+if box is None:
+    sys.exit(1)
+r = wait(lambda: near(rect(box), (BX, BY, 44, 44)))
+check(f"restart: still the button at its place ({rect(box)}; expected {BX},{BY} 44x44)", r)
+r = wait(lambda: said(True) == 2)
+check(f"restart: page told it is collapsed (told {said(True)}x in all)", r)
+time.sleep(1.2)
+s = bspec()
+check(f"restart: spec unchanged ({s.get('collapsed')}, {s['width']}x{s['height']}, at {s['x']},{s['y']})",
+      s.get("collapsed") is True and (s["width"], s["height"]) == (320, 220) and near((s["x"], s["y"]), (BX, BY)))
+
+# A click on the button (no movement): expands to the size it had, top-right corner at the button's.
+mouse(BX + 22, BY + 22)
+time.sleep(0.3)
+mouse(BX + 22, BY + 22, press=True)
+time.sleep(0.15)
+mouse(BX + 24, BY + 23, release=True)   # a hand is never quite still: under the 4 px it is a click
+check("expand: expanded event after a click", wait(lambda: "expanded" in btypes()))
+EX = BX + 44 - 320
+r = wait(lambda: near(rect(box), (EX, BY, 320, 220)))
+check(f"expand: the size it had, from the button's corner ({rect(box)}; expected {EX},{BY} 320x220)", r)
+time.sleep(1.2)
+s = bspec()
+check(f"expand: spec ({s.get('collapsed')}, {s['width']}x{s['height']}, at {s['x']},{s['y']})",
+      s.get("collapsed") is False and (s["width"], s["height"]) == (320, 220) and near((s["x"], s["y"]), (EX, BY)))
+check("expand: no resized event", "resized" not in btypes())
+shot("expanded")
+# Expanded again: the edge resizes as before.
+drag(EX + 318, BY + 218, EX + 358, BY + 248)
+check("expand: the corner resizes again", wait(lambda: "resized" in btypes()))
+check(f"expand: spec has the new size ({bspec()['width']}x{bspec()['height']})", wait(lambda: near((bspec()["width"], bspec()["height"]), (360, 250), 4)))
+
+# From the spec (a mod): collapse at the bottom-left corner; no event for what the spec asked.
+n = btypes().count("collapsed")
+s = bspec(); W, H = s["width"], s["height"]
+s.update(collapsed=True, collapseAnchor="bottom-left", collapsedWidth=40, collapsedHeight=36); bwrite(s)
+r = wait(lambda: near(rect(box), (EX, BY + H - 36, 40, 36)))
+check(f"spec: collapsed to 40x36 at the bottom-left corner ({rect(box)}; expected {EX},{BY + H - 36})", r)
+check("spec: page told", wait(lambda: said(True) == 3))
+time.sleep(1.0)
+s = bspec()
+check(f"spec: no collapsed event, expanded size kept ({s['width']}x{s['height']})", btypes().count("collapsed") == n and (s["width"], s["height"]) == (W, H))
+# Hovered, then minimized, then shown again with the mouse elsewhere: not stuck on hoverOpacity.
+bx, by, _, _ = rect(box)
+mouse(bx + 20, by + 18)
+see("minimize: hovered first", 1.0, 2)
+s = bspec(); s["minimized"] = True; bwrite(s)
+check("minimize: hidden", wait(lambda: box.get_attributes().map_state != X.IsViewable))
+mouse(*AWAY)
+s = bspec(); s["minimized"] = False; bwrite(s)
+check("minimize: shown again", wait(lambda: box.get_attributes().map_state == X.IsViewable))
+see("minimize: not stuck hovered", 0.8, 3)
+# Drag the button to the screen's bottom-left and expand from the spec, top-right corner fixed: the
+# window would reach off the left and the bottom; all of it comes onto the screen.
+bx, by, _, _ = rect(box)
+drag(bx + 20, by + 18, bx + 20 - 350, 790)
+check("spec: button dragged to the bottom-left of the screen", wait(lambda: place(box)[1] > 700 and place(box)[0] < 60))
+time.sleep(1.0)
+s = bspec()
+check(f"spec: still collapsed after the drag (at {s['x']},{s['y']})", s.get("collapsed") is True)
+n = btypes().count("expanded")
+off = (s["x"] + 40 - W, s["y"])
+s.update(collapsed=False, collapseAnchor="top-right"); bwrite(s)
+r = wait(lambda: near(rect(box)[2:], (W, H), 4))
+check(f"spec: expanded to the size it had ({rect(box)[2]}x{rect(box)[3]}; expected {W}x{H})", r)
+r = wait(lambda: near(rect(box)[:2], (0, 800 - H)))
+x, y, w, h = rect(box)
+check(f"spec: brought back onto the screen ({x},{y} {w}x{h} in 1280x800; unclamped it would be at {off[0]},{off[1]})", r)
+time.sleep(1.2)
+s = bspec()
+check(f"spec: spec has the place it ended at ({s['x']},{s['y']}; window {rect(box)[:2]}), no expanded event",
+      near((s["x"], s["y"]), rect(box)[:2]) and btypes().count("expanded") == n)
+check("box: no warning, no error", "warning" not in btypes() and "error" not in btypes())
+if fail:
+    print("--- box events"); print("\n".join(json.dumps(e) for e in bev()))
+os.remove(f"{D}/windows/box.json")
+
+# 11. While install.sh rebuilds the helper (paused), start doesn't start one.
 subprocess.run([BIN, "stop", D], env=env)
 wait(lambda: find("wm-parked") is None and find("wm-note") is None)
 time.sleep(1)
