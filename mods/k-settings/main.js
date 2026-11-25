@@ -580,7 +580,17 @@ export default class Settings extends View {
           this.stepper(t, `st-${key}`, `${Math.round(s[key] * 100)}%`, by(-step), by(step)),
         );
       }))
-      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT));
+      .child(fontRow("ui_font", null, "Interface font", s.ui_font_family, DEFAULT_UI_FONT))
+      // k-settings: k-tabs reads this (shared "k-tabs.multiline").
+      .child(this.heading(t, "Tab bar"))
+      .child(
+        this.row(
+          t,
+          "Tabs on several lines",
+          "Off: one line that scrolls sideways. On: tabs wrap onto more lines and the bar grows to fit. For the k-tabs tab bar.",
+          this.toggle(t, "st-tabs-multiline", shared("k-tabs.multiline") === true, () => setShared("k-tabs.multiline", !(shared("k-tabs.multiline") === true))),
+        ),
+      );
   }
 
   keyboard(t) {
