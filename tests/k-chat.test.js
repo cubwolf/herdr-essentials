@@ -50,6 +50,20 @@ function setup(chair, opts = [], list = null) {
 }
 const pick = (next, more = {}) => ({ next, ask: `請 ${next} 說明`, yolo: false, done: false, reason: "輪到他", ...more });
 
+test("主席自己也說話:先講再點名;自己答得了就直接回 Owner", async () => {
+  const t = setup([pick("alpha", { say: "先整理一下:兩個方案差在成本。\n\n## 我的看法\n\n偏向甲。" }), pick("owner", { say: "這題我直接答:用甲。", ask: "同意嗎?" })]);
+  try {
+    t.start();
+    await t.until("等 Owner", () => t.s().status === "waiting");
+    const msgs = L.messages(t.md());
+    assert.deepEqual(msgs.map((m) => m.role), ["owner", "chair", "member", "chair"]);
+    assert.match(msgs[1].text, /^先整理一下:兩個方案差在成本。[\s\S]*### 我的看法[\s\S]*→ \*\*@alpha\*\*:請 alpha 說明/, "主席的話在點名前面,自己的標題降級");
+    assert.match(msgs[3].text, /^這題我直接答:用甲。\n\n→ \*\*@Owner\*\*:同意嗎?/);
+    assert.equal(t.calls().filter((c) => !c.args.includes("--json-schema")).length, 1, "主席回 Owner 那一輪沒有叫成員");
+    assert.equal(L.turnFrom(t.s(), { next: "alpha" }, null).say, "", "沒給 say 就是空的");
+  } finally { await t.stop(); }
+});
+
 test("一場討論:主席輪流點名、YOLO 只開那一輪、別台機器走 hc、結論與開卡", async () => {
   const t = setup([pick("alpha"), pick("beta", { yolo: true, reason: "談定了,請 beta 實作" }), pick("alpha")]);
   try {
