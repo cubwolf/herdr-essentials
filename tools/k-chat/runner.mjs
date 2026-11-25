@@ -211,9 +211,10 @@ function host(statePath) {
     if (!turn) {
       now("chair");
       turn = L.turnFrom(s, await chair(L.CHAIR_SCHEMA, L.chairPrompt(s, record())), lastSpeaker());
-      if (turn.done) return conclude(turn.reason);
-      if (turn.next === "owner") { write("chair", `→ **@Owner**:${turn.ask}${turn.reason ? `\n\n> ${turn.reason}` : ""}`); s.status = "waiting"; return; }
-      write("chair", `→ **@${turn.next}**:${turn.ask}${turn.reason && !turn.yolo ? `\n\n> ${turn.reason}` : ""}${turn.yolo ? `\n\n${L.yoloLine(turn.next, turn.reason)}` : ""}`);
+      const say = turn.say ? `${turn.say}\n\n` : "";
+      if (turn.done) return conclude(turn.reason);   // its own words would only repeat the conclusion that follows
+      if (turn.next === "owner") { write("chair", `${say}→ **@Owner**:${turn.ask}${turn.reason ? `\n\n> ${turn.reason}` : ""}`); s.status = "waiting"; return; }
+      write("chair", `${say}→ **@${turn.next}**:${turn.ask}${turn.reason && !turn.yolo ? `\n\n> ${turn.reason}` : ""}${turn.yolo ? `\n\n${L.yoloLine(turn.next, turn.reason)}` : ""}`);
     }
     const m = member(turn.next);
     if (!m) return;

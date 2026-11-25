@@ -125,3 +125,12 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 - 別台機器的成員走 `hc exec`,一輪最多 10 分鐘(本機 15 分鐘、YOLO 30 分鐘)。
 - plugin 的指令(`/k-chat:new` 等)還沒在真的 Claude Code session 裡裝起來跑過;`claude plugin validate` 過了,`start` 在測試環境的 core 實跑過。
 - 「開成 Tide 卡」只用假的 `task` 測過(`tests/k-chat.test.js`),沒有對真的 Tide 開過卡。
+
+## 主席自己也說話(2026-11-26,Owner 要求)
+
+- 原本主席只點名、不發表意見(提示寫明「你自己不發表意見」),Owner 叫它講看法它也不會講。
+- 現在主席的輸出多一欄 `say`:回應 Owner、整理共識與分歧、指出漏掉的點、講自己的看法;三句以內,沒有就空字串。寫在紀錄裡點名那一則的前面(同一則訊息)。
+- Owner 問的事主席自己答得了(不需要讀 repo)時,`say` 回答、`next` 填 `owner`,那一輪不叫成員。
+- 主席仍然沒有工具、讀不到檔案;提示寫明要查證的事交給成員。
+- `done: true` 那一輪的 `say` 不寫進紀錄(緊接著就是結論,實測內容重複)。
+- 實測:真的 `claude -p`(Sonnet 主席 + 一位成員)跑過一場,主席先講看法再點名。Codex / Gemini 當主席沒實測這一欄。

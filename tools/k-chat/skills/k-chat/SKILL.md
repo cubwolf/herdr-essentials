@@ -46,7 +46,7 @@ node ${CLAUDE_PLUGIN_ROOT}/runner.mjs <指令> …
 
 ## 流程與權限
 
-1. 每一輪:收 Owner 的訊息 → 主席(沒有任何工具)輸出 `{next, ask, yolo, done, reason}` → 那位成員發言 → 寫進紀錄。
+1. 每一輪:收 Owner 的訊息 → 主席(沒有任何工具)輸出 `{say, next, ask, yolo, done, reason}`(`say` = 主席自己要說的話,可以空;寫在點名那一則的前面) → 那位成員發言 → 寫進紀錄。
 2. 成員**預設唯讀**:Claude 只有讀檔、搜尋、查網頁的工具,不載 MCP;Codex 是唯讀沙箱;Gemini(agy)用只對那一次有效的 deny 規則擋寫檔、指令與 MCP(agy 要支援 `--settings`,太舊會直接失敗);真的看到它寫了檔 / 跑了指令,主持程式也會中止那一輪並記在紀錄裡。
 3. 主席判斷大家已經談定要動手時,可以讓**一個成員的一輪**開 YOLO(不問權限,可改檔、跑指令,在他自己的資料夾裡)。紀錄會有一行 `🔓 主席授權 <成員> YOLO:<理由>`;下一輪就收回。`--no-yolo` 或 `set allow_yolo=false` 會把這個權力關掉。
 4. 到輪數上限、主席說 `done`、或 Owner `/end` → 主席寫結論(決定 / 還沒談定 / 待辦),待辦存進 `todos`。**待辦不會自己變成卡**,要 Owner 說了才 `card`。

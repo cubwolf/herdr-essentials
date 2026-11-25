@@ -119,13 +119,14 @@ const roster = (s) => s.members.map((m) => `- ${m.name}:Space「${m.space}」,${
 export const CHAIR_SCHEMA = {
   type: "object",
   properties: {
+    say: { type: "string", description: "你自己要對大家說的話(回應 Owner、整理分歧、指出漏掉的點、你的看法);沒有就給空字串" },
     next: { type: "string", description: "下一個發言的成員名字;要等 Owner 回話就填 owner" },
     ask: { type: "string", description: "要問他什麼,或要他做什麼" },
     yolo: { type: "boolean", description: "這一輪讓他動手改檔 / 跑指令" },
     done: { type: "boolean", description: "討論可以結束了" },
     reason: { type: "string", description: "一句話:為什麼是他、為什麼開 YOLO、或為什麼結束" },
   },
-  required: ["next", "ask", "yolo", "done", "reason"], additionalProperties: false,
+  required: ["say", "next", "ask", "yolo", "done", "reason"], additionalProperties: false,
 };
 export const CONCLUDE_SCHEMA = {
   type: "object",
@@ -139,12 +140,14 @@ export const CONCLUDE_SCHEMA = {
 };
 
 export function chairPrompt(s, record) {
-  return `你是「${s.title}」這場多 agent 討論的主席。Owner(人)主持,你決定每一輪誰發言。你自己不發表意見。
+  return `你是「${s.title}」這場多 agent 討論的主席。Owner(人)主持,你決定每一輪誰發言,自己也可以說話。
 
 成員:
 ${roster(s)}
 
 規則:
+- 你自己的話寫在 say:回應 Owner 剛說的、整理目前的共識與分歧、指出大家漏掉的點、或講你自己的看法。簡短(三句以內),不要重述成員剛講過的內容;沒有要說的就留空字串,不必每一輪都講;done: true 那一輪不用寫(接著就寫結論)。你沒有任何工具、讀不到檔案:要查證的事交給成員,不要講得像你查過。
+- Owner 問的事你自己就答得了(不需要讀任何 repo),就在 say 回答,next 填 "owner"。
 - 一次只點一個人。挑最能推進討論的:被問到的、有那個 repo 的知識的、還沒表態的。不要讓同一個人連講三輪。
 - Owner 的話優先:他剛說了什麼,下一輪就先處理那件事。
 - 需要 Owner 決定或補資料時,next 填 "owner",ask 寫要他回答什麼,然後等他。
@@ -296,7 +299,7 @@ export function turnFrom(s, c, last) {
     // Not a member: whoever follows the last speaker.
     next = names[(names.indexOf(last) + 1) % names.length] ?? "owner";
   }
-  return { next: next.toLowerCase() === "owner" ? "owner" : next, ask: String(c?.ask ?? "").trim(), yolo: Boolean(c?.yolo) && s.allow_yolo && !done,
+  return { say: String(c?.say ?? "").trim(), next: next.toLowerCase() === "owner" ? "owner" : next, ask: String(c?.ask ?? "").trim(), yolo: Boolean(c?.yolo) && s.allow_yolo && !done,
     done, reason: String(c?.reason ?? "").trim(), from: "chair" };
 }
 
