@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -29,47 +30,88 @@ const EVENTS_MAX_BYTES: u64 = 256 * 1024;
 const EVENTS_KEEP_LINES: usize = 200;
 
 /// Runs in every page before its own scripts (after `window.__floatFrameless` is set).
-/// Messages that start with \u0001 are for the helper (move, resize, close, minimize), not the mod.
+/// Messages that start with \u0001 are for the helper (move, resize, close, minimize, collapse,
+/// expand), not the mod.
 const PAGE_API: &str = r#"
 (() => {
   const ctl = (c) => window.ipc.postMessage("\u0001" + c);
+  // <html data-float-collapsed> while collapsed: a page can switch its look with CSS alone.
+  const mark = (on) => { if (document.documentElement) document.documentElement.toggleAttribute("data-float-collapsed", on); };
+  mark(!!window.__floatCollapsed);
+  addEventListener("DOMContentLoaded", () => mark(window.float.collapsed));
   window.float = {
     data: undefined,
+    // Collapsed to a button (the spec's `collapsed`). The helper keeps it current.
+    collapsed: !!window.__floatCollapsed,
     _fns: [],
+    _cfns: [],
     send(value) { window.ipc.postMessage(JSON.stringify(value === undefined ? null : value)); },
     onData(fn) { this._fns.push(fn); if (this.data !== undefined) fn(this.data); },
     close() { ctl("close"); },
     minimize() { ctl("minimize"); },
+    // Shrinks the window to a button of this size (default: the spec's collapsedWidth × collapsedHeight,
+    // 44 × 44) / brings it back to the size it had. The page learns the outcome through onCollapsed.
+    collapse(size) {
+      const w = size ? Number(size.width) : NaN, h = size ? Number(size.height) : NaN;
+      ctl(w > 0 && h > 0 ? "collapse:" + w + "," + h : "collapse");
+    },
+    expand() { ctl("expand"); },
+    // fn(collapsed) now, and again whenever it changes (by the page, the spec, or a restart).
+    onCollapsed(fn) { this._cfns.push(fn); try { fn(this.collapsed); } catch (e) { console.error(e); } },
+    __collapsed(value) {
+      value = !!value; mark(value);
+      if (value === this.collapsed) return;
+      this.collapsed = value;
+      for (const fn of this._cfns) { try { fn(value); } catch (e) { console.error(e); } }
+    },
     __data(value) { this.data = value; for (const fn of this._fns) { try { fn(value); } catch (e) { console.error(e); } } },
   };
   // Without the system's frame the page is the whole window: elements marked data-float-drag move it,
-  // and the outer few pixels resize it.
+  // and the outer few pixels resize it (not while collapsed).
+  // data-float-drag-click: for something that is also clicked (a button). Pressing and moving it
+  // SLOP pixels moves the window and swallows the click; letting go without moving is a plain click.
   const B = 6, CUR = { n: "ns", s: "ns", e: "ew", w: "ew", ne: "nesw", sw: "nesw", nw: "nwse", se: "nwse" };
   const edge = (e) => {
-    if (!window.__floatFrameless) return "";
+    if (!window.__floatFrameless || window.float.collapsed) return "";
     const x = e.clientX, y = e.clientY;
     return (y < B ? "n" : y >= innerHeight - B ? "s" : "") + (x < B ? "w" : x >= innerWidth - B ? "e" : "");
   };
-  let style = null;
+  const SLOP = 4;
+  let style = null, press = null, dragged = false;
   addEventListener("mousemove", (e) => {
+    if (press) {
+      if (!(e.buttons & 1)) press = null;
+      else if (Math.hypot(e.screenX - press.x, e.screenY - press.y) >= SLOP) { press = null; dragged = true; ctl("drag"); }
+    }
     const d = edge(e), css = d ? `*{cursor:${CUR[d]}-resize !important}` : "";
     if (!style) { if (!css) return; style = document.createElement("style"); (document.head || document.documentElement).appendChild(style); }
     if (style.textContent !== css) style.textContent = css;
   }, true);
   addEventListener("mousedown", (e) => {
+    press = null; dragged = false;
     if (e.button !== 0) return;
     const d = edge(e);
     if (d) { e.preventDefault(); e.stopPropagation(); ctl("resize:" + d); return; }
     const t = e.target instanceof Element ? e.target : null;
+    if (t && t.closest("[data-float-drag-click]") && !t.closest("[data-float-nodrag]")) {
+      press = { x: e.screenX, y: e.screenY }; // no preventDefault: it may still become a click
+      return;
+    }
     if (t && t.closest("[data-float-drag]") && !t.closest("button,input,textarea,select,a,[data-float-nodrag]")) {
       e.preventDefault(); ctl("drag");
     }
   }, true);
+  addEventListener("mouseup", () => { press = null; }, true);
+  // The click that ends a drag (if the system delivers one at all) is not a click.
+  addEventListener("click", (e) => {
+    if (!dragged) return;
+    dragged = false; e.preventDefault(); e.stopImmediatePropagation();
+  }, true);
 })();
 "#;
 
-fn page_api(frame: bool) -> String {
-    format!("window.__floatFrameless = {};\n{PAGE_API}", !frame)
+fn page_api(frame: bool, collapsed: bool) -> String {
+    format!("window.__floatFrameless = {};\nwindow.__floatCollapsed = {collapsed};\n{PAGE_API}", !frame)
 }
 
 #[derive(Deserialize, Clone, PartialEq, Debug)]
@@ -90,6 +132,17 @@ struct Spec {
     /// Opacity while the person works in a window this one covers (it is not focused and the
     /// active window overlaps it). None: always `opacity`.
     behind_opacity: Option<f64>,
+    /// Opacity while the mouse is over the window (focused or not). Wins over the two above.
+    hover_opacity: Option<f64>,
+    /// Shrunk to a button of `collapsed_width` × `collapsed_height`. `width` / `height` stay the
+    /// expanded size; `x` / `y` are where the window is now (the button's corner while collapsed).
+    /// Written here when the page collapses / expands; a mod can set it too.
+    collapsed: bool,
+    collapsed_width: f64,
+    collapsed_height: f64,
+    /// The corner that stays put when collapsing / expanding: top-right (default), top-left,
+    /// bottom-right, bottom-left.
+    collapse_anchor: String,
     /// Written here when the person minimizes the window; a mod sets it to false to bring it back.
     minimized: bool,
 }
@@ -110,6 +163,11 @@ impl Default for Spec {
             taskbar: false,
             opacity: 1.0,
             behind_opacity: None,
+            hover_opacity: None,
+            collapsed: false,
+            collapsed_width: COLLAPSED_SIDE,
+            collapsed_height: COLLAPSED_SIDE,
+            collapse_anchor: "top-right".into(),
             minimized: false,
         }
     }
@@ -120,6 +178,39 @@ type Area = (f64, f64, f64, f64);
 
 /// The smallest width / height taken from a spec; below it the window would be lost.
 const MIN_SIDE: f64 = 20.0;
+
+/// The size of a collapsed window when the spec doesn't say, and the smallest one taken from it.
+const COLLAPSED_SIDE: f64 = 44.0;
+const COLLAPSED_MIN: f64 = 16.0;
+/// A collapsed window keeps showing as hovered this long after the mouse left: passing over its
+/// edge doesn't flicker.
+const HOVER_LEAVE: Duration = Duration::from_millis(150);
+const POINTER_POLL: Duration = Duration::from_millis(50);
+
+/// The size of the window while collapsed.
+fn collapsed_size(spec: &Spec) -> (f64, f64) {
+    let side = |v: f64| if v.is_finite() && v >= COLLAPSED_MIN { v.round() } else { COLLAPSED_SIDE };
+    (side(spec.collapsed_width), side(spec.collapsed_height))
+}
+
+/// The size the window has on the screen: `width` × `height`, or the button's while collapsed.
+fn shown_size(spec: &Spec) -> (f64, f64) {
+    if spec.collapsed { collapsed_size(spec) } else { (spec.width, spec.height) }
+}
+
+/// How far the window's top-left moves when its size goes `from` -> `to` and the anchor corner stays.
+fn anchor_shift(anchor: &str, from: (f64, f64), to: (f64, f64)) -> (f64, f64) {
+    let a = anchor.to_ascii_lowercase();
+    (if a.contains("left") { 0.0 } else { from.0 - to.0 }, if a.contains("bottom") { from.1 - to.1 } else { 0.0 })
+}
+
+/// Moves a window of this size wholly onto the screen that holds `near` (else the first one). A
+/// window bigger than the screen starts at the screen's corner.
+fn onto_screen((x, y): (f64, f64), (w, h): (f64, f64), near: (f64, f64), screens: &[Area]) -> (f64, f64) {
+    let holds = |&&(sx, sy, sw, sh): &&Area| near.0 >= sx && near.0 < sx + sw && near.1 >= sy && near.1 < sy + sh;
+    let Some(&(sx, sy, sw, sh)) = screens.iter().find(holds).or(screens.first()) else { return (x, y) };
+    (x.min(sx + sw - w).max(sx).round(), y.min(sy + sh - h).max(sy).round())
+}
 
 /// Makes a spec's place one the person can see: a size too small to find (0×0) becomes the default,
 /// and a place on no screen (Windows parks a minimized window at -32000, an older helper wrote that
@@ -136,7 +227,7 @@ fn fit(spec: &mut Spec, screens: &[Area]) -> bool {
         changed = true;
     }
     if let (Some(x), Some(y)) = (spec.x, spec.y) {
-        let (w, h) = (spec.width, spec.height);
+        let (w, h) = shown_size(spec);
         // At least a corner big enough to grab is on some screen.
         let seen = |&(sx, sy, sw, sh): &Area| {
             (x + w).min(sx + sw) - x.max(sx) >= w.min(40.0) && (y + h).min(sy + sh) - y.max(sy) >= h.min(MIN_SIDE)
@@ -172,12 +263,18 @@ fn screens(all: impl Iterator<Item = tao::monitor::MonitorHandle>, primary: Opti
     out
 }
 
+/// Some window has a `hoverOpacity`: the pointer thread asks for a look every POINTER_POLL.
+static WATCH_POINTER: AtomicBool = AtomicBool::new(false);
+
 enum UserEvent {
     /// The windows folder as it is now: id -> spec text. Sent only when something changed.
     Specs(HashMap<String, String>),
     Message(String, String),
-    /// From the page to the helper: drag, resize:<n|s|e|w|ne|nw|se|sw>, close, minimize.
+    /// From the page to the helper: drag, resize:<n|s|e|w|ne|nw|se|sw>, close, minimize,
+    /// collapse[:<width>,<height>], expand.
     Control(String, String),
+    /// Time to look where the mouse is (only sent while some window has a `hoverOpacity`).
+    Pointer,
     Loaded(String),
     Tick,
     Stop,
@@ -194,6 +291,10 @@ struct Float {
     focused: bool,
     /// The active window overlaps this one (only looked at while `behind_opacity` is set).
     behind: bool,
+    /// The mouse is over this window (only looked at while `hover_opacity` is set), and when it
+    /// was first seen outside.
+    hover: bool,
+    hover_left: Option<Instant>,
     /// The opacity the window has now (NaN: not set yet).
     shown: f64,
     warned: bool,
@@ -368,6 +469,15 @@ fn run(dir: &Path) -> Result<(), String> {
         let (dir, proxy) = (dir.clone(), proxy.clone());
         std::thread::spawn(move || watch(&dir, proxy));
     }
+    {
+        let proxy = proxy.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(POINTER_POLL);
+            if WATCH_POINTER.load(Ordering::Relaxed) && proxy.send_event(UserEvent::Pointer).is_err() {
+                return;
+            }
+        });
+    }
 
     let mut context = WebContext::new(Some(dir.join("webview")));
     let mut floats: HashMap<WindowId, Float> = HashMap::new();
@@ -427,6 +537,16 @@ fn run(dir: &Path) -> Result<(), String> {
                         }
                     }
                 }
+                WATCH_POINTER.store(floats.values().any(|f| f.spec.hover_opacity.is_some()), Ordering::Relaxed);
+            }
+            Event::UserEvent(UserEvent::Pointer) => {
+                for f in floats.values_mut().filter(|f| f.spec.hover_opacity.is_some()) {
+                    let minimized = f.window.is_minimized();
+                    let over = !minimized && pointer_over(f);
+                    if hover_step(&mut f.hover, &mut f.hover_left, over, minimized, Instant::now()) {
+                        show_opacity(&dir, f, false);
+                    }
+                }
             }
             Event::UserEvent(UserEvent::Message(id, body)) => {
                 let data = serde_json::from_str::<Value>(&body).unwrap_or(Value::String(body));
@@ -434,15 +554,39 @@ fn run(dir: &Path) -> Result<(), String> {
             }
             Event::UserEvent(UserEvent::Control(id, cmd)) => {
                 let Some(w) = floats.iter().find(|(_, f)| f.id == id).map(|(w, _)| *w) else { return };
-                let f = &floats[&w];
+                if cmd == "close" {
+                    user_closed(&dir, &mut floats, w);
+                    return;
+                }
+                let Some(f) = floats.get_mut(&w) else { return };
                 match cmd.as_str() {
                     "drag" => {
                         let _ = f.window.drag_window();
                     }
                     "minimize" => f.window.set_minimized(true),
-                    "close" => user_closed(&dir, &mut floats, w),
+                    "expand" => {
+                        if f.spec.collapsed {
+                            f.spec.collapsed = false;
+                            set_collapsed(&dir, f, None, true);
+                        }
+                    }
+                    c if c == "collapse" || c.starts_with("collapse:") => {
+                        if let Some((w, h)) = c.strip_prefix("collapse:").and_then(|s| s.split_once(',')) {
+                            if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
+                                // While collapsed already: the button keeps the size it has.
+                                if !f.spec.collapsed {
+                                    (f.spec.collapsed_width, f.spec.collapsed_height) = (w, h);
+                                }
+                            }
+                        }
+                        if !f.spec.collapsed {
+                            f.spec.collapsed = true;
+                            set_collapsed(&dir, f, None, true);
+                        }
+                    }
                     c => {
-                        if let Some(d) = c.strip_prefix("resize:").and_then(resize_direction) {
+                        // A collapsed window has no edges to pull.
+                        if let Some(d) = c.strip_prefix("resize:").and_then(resize_direction).filter(|_| !f.spec.collapsed) {
                             let _ = f.window.drag_resize_window(d);
                         }
                     }
@@ -451,6 +595,7 @@ fn run(dir: &Path) -> Result<(), String> {
             Event::UserEvent(UserEvent::Loaded(id)) => {
                 if let Some(f) = floats.values().find(|f| f.id == id) {
                     push_data(f);
+                    push_collapsed(f);
                     emit(&dir, &id, json!({ "type": "ready" }));
                 }
             }
@@ -580,9 +725,10 @@ fn open(
     id: &str,
     spec: &Spec,
 ) -> Result<Float, String> {
+    let shown = shown_size(spec);
     let mut builder = WindowBuilder::new()
         .with_title(&spec.title)
-        .with_inner_size(LogicalSize::new(spec.width, spec.height))
+        .with_inner_size(LogicalSize::new(shown.0, shown.1))
         .with_always_on_top(spec.topmost)
         .with_decorations(spec.frame)
         .with_focused(false);
@@ -603,13 +749,16 @@ fn open(
     if let (Some(x), Some(y)) = (spec.x, spec.y) {
         window.set_outer_position(LogicalPosition::new(x, y));
     }
+    if spec.collapsed {
+        hold_size(&window, Some(shown));
+    }
 
     let (ipc_id, ipc_proxy) = (id.to_string(), proxy.clone());
     let (load_id, load_proxy) = (id.to_string(), proxy.clone());
     let webview_builder = WebViewBuilder::new_with_web_context(context)
         // A window that appears must not take the keyboard from what the person is typing in.
         .with_focused(false)
-        .with_initialization_script(&page_api(spec.frame))
+        .with_initialization_script(&page_api(spec.frame, spec.collapsed))
         .with_html(&spec.html)
         .with_ipc_handler(move |request| {
             let body = request.body();
@@ -643,6 +792,8 @@ fn open(
         resized: None,
         focused: false,
         behind: false,
+        hover: false,
+        hover_left: None,
         shown: f64::NAN,
         warned: false,
         minimize_asked: None,
@@ -659,14 +810,32 @@ fn apply(dir: &Path, f: &mut Float, spec: Spec) {
     if spec.title != old.title {
         f.window.set_title(&spec.title);
     }
-    if (spec.width, spec.height) != (old.width, old.height) {
-        f.window.set_inner_size(LogicalSize::new(spec.width, spec.height));
-    }
-    if (spec.x, spec.y) != (old.x, old.y) {
+    let placed = (spec.x, spec.y) != (old.x, old.y);
+    let flipped = spec.collapsed != old.collapsed;
+    if placed {
         if let (Some(x), Some(y)) = (spec.x, spec.y) {
             f.window.set_outer_position(LogicalPosition::new(x, y));
         }
     }
+    if flipped {
+        // The spec's place, if this change gave one, is where the window was before the flip.
+        let from = if placed { spec.x.zip(spec.y) } else { None };
+        set_collapsed(dir, f, from, false);
+    } else if f.spec.collapsed {
+        // `width` / `height` are for later (expanding); only the button's own size shows now.
+        let (was, now) = (collapsed_size(&old), collapsed_size(&f.spec));
+        if was != now {
+            hold_size(&f.window, Some(now));
+            f.window.set_inner_size(LogicalSize::new(now.0, now.1));
+            if let Some((x, y)) = position_now(f) {
+                let (dx, dy) = anchor_shift(&f.spec.collapse_anchor, was, now);
+                f.window.set_outer_position(LogicalPosition::new(x + dx, y + dy));
+            }
+        }
+    } else if (f.spec.width, f.spec.height) != (old.width, old.height) {
+        f.window.set_inner_size(LogicalSize::new(f.spec.width, f.spec.height));
+    }
+    let spec = &f.spec;
     if spec.topmost != old.topmost {
         f.window.set_always_on_top(spec.topmost);
     }
@@ -692,6 +861,9 @@ fn apply(dir: &Path, f: &mut Float, spec: Spec) {
     if spec.behind_opacity.is_none() {
         f.behind = false;
     }
+    if spec.hover_opacity.is_none() {
+        (f.hover, f.hover_left) = (false, None);
+    }
     // Last: on Windows the changes above rewrite the window's styles, and the see-through one with them.
     show_opacity(dir, f, cfg!(windows));
 }
@@ -710,18 +882,19 @@ fn sync_minimized(dir: &Path, f: &mut Float) {
     }
 }
 
-/// The opacity the window should have now: its `behindOpacity` while the person works in a window it
-/// covers, else its `opacity`.
-fn wanted_opacity(spec: &Spec, behind: bool) -> f64 {
-    let v = match (behind, spec.behind_opacity) {
-        (true, Some(b)) => b,
+/// The opacity the window should have now: its `hoverOpacity` with the mouse over it, else its
+/// `behindOpacity` while the person works in a window it covers, else its `opacity`.
+fn wanted_opacity(spec: &Spec, hover: bool, behind: bool) -> f64 {
+    let v = match (hover, spec.hover_opacity, behind, spec.behind_opacity) {
+        (true, Some(h), _, _) => h,
+        (_, _, true, Some(b)) => b,
         _ => spec.opacity,
     };
     if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
 }
 
 fn show_opacity(dir: &Path, f: &mut Float, force: bool) {
-    let value = wanted_opacity(&f.spec, f.behind);
+    let value = wanted_opacity(&f.spec, f.hover, f.behind);
     // A window never made see-through needs nothing (and on Windows stays out of layered mode).
     let unchanged = value == f.shown || (f.shown.is_nan() && value >= 1.0);
     // `force`: on Windows a style change drops the see-through setting; put it back.
@@ -733,6 +906,173 @@ fn show_opacity(dir: &Path, f: &mut Float, force: bool) {
         f.warned = true;
         emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here (the desktop doesn't blend windows): the window is opaque" }));
     }
+}
+
+/// One look at the mouse: `over` = it is on the window now. Entering counts at once; leaving only
+/// after HOVER_LEAVE outside (at once for a minimized window). True if `hover` changed.
+fn hover_step(hover: &mut bool, left: &mut Option<Instant>, over: bool, at_once: bool, now: Instant) -> bool {
+    if over {
+        *left = None;
+        return !std::mem::replace(hover, true);
+    }
+    if !*hover {
+        return false;
+    }
+    let since = *left.get_or_insert(now);
+    if at_once || now.duration_since(since) >= HOVER_LEAVE {
+        (*hover, *left) = (false, None);
+        return true;
+    }
+    false
+}
+
+/// The mouse is on this window: the window under the mouse is this one (a window in front of it
+/// doesn't count). A click-through window is never "under" the mouse, so its rectangle is used.
+#[cfg(windows)]
+fn pointer_over(f: &Float) -> bool {
+    use tao::platform::windows::WindowExtWindows;
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        l: i32,
+        t: i32,
+        r: i32,
+        b: i32,
+    }
+    const GA_ROOT: u32 = 2;
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetCursorPos(point: *mut Point) -> i32;
+        fn WindowFromPoint(point: Point) -> isize;
+        fn GetAncestor(hwnd: isize, flags: u32) -> isize;
+        fn GetWindowRect(hwnd: isize, rect: *mut Rect) -> i32;
+    }
+    let me = f.window.hwnd();
+    // SAFETY: plain queries; a stale handle only makes them fail.
+    unsafe {
+        let mut p = Point::default();
+        if GetCursorPos(&mut p) == 0 {
+            return false;
+        }
+        if f.spec.click_through {
+            let mut m = Rect::default();
+            return GetWindowRect(me, &mut m) != 0 && p.x >= m.l && p.x < m.r && p.y >= m.t && p.y < m.b;
+        }
+        // The webview is a child window (of another process): go up to the top-level one.
+        let at = WindowFromPoint(p);
+        at != 0 && (at == me || GetAncestor(at, GA_ROOT) == me)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pointer_over(f: &Float) -> bool {
+    use gtk::gdk::prelude::{DeviceExt, SeatExt};
+    use gtk::prelude::WidgetExt;
+    use tao::platform::unix::WindowExtUnix;
+    let Some(mine) = f.window.gtk_window().window() else { return false };
+    let Some(pointer) = mine.display().default_seat().and_then(|s| s.pointer()) else { return false };
+    if f.spec.click_through {
+        let (_, px, py) = pointer.position();
+        let (_, x, y) = mine.origin();
+        return px >= x && px < x + mine.width() && py >= y && py < y + mine.height();
+    }
+    // Answers only for this program's windows: under another program's window it is None.
+    pointer.window_at_position().0.is_some_and(|w| w.toplevel() == mine)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn pointer_over(_f: &Float) -> bool {
+    false
+}
+
+/// Keeps the window at exactly this size (None: free again). While collapsed: nothing can resize
+/// the button, and on Windows it may be smaller than the system's smallest window (tao answers
+/// WM_GETMINMAXINFO with these instead of SM_CXMINTRACK, about 120 logical pixels wide).
+fn hold_size(window: &Window, size: Option<(f64, f64)>) {
+    use tao::dpi::PixelUnit;
+    use tao::window::WindowSizeConstraints;
+    let c = match size {
+        Some((w, h)) => WindowSizeConstraints::new(
+            Some(PixelUnit::Logical(w.into())),
+            Some(PixelUnit::Logical(h.into())),
+            Some(PixelUnit::Logical(w.into())),
+            Some(PixelUnit::Logical(h.into())),
+        ),
+        None => WindowSizeConstraints::default(),
+    };
+    window.set_inner_size_constraints(c);
+}
+
+/// Where the window is now (logical pixels), as `settle` remembers it.
+fn position_now(f: &Float) -> Option<(f64, f64)> {
+    // Linux without a frame: tao's outer position comes from the window manager's frame extents,
+    // which for an undecorated window under marco are off by the title bar it doesn't have
+    // (every save moved the window 30 px up). Moving it places the content, so read the content.
+    let position = if cfg!(target_os = "linux") && !f.spec.frame { f.window.inner_position() } else { f.window.outer_position() };
+    let p: LogicalPosition<f64> = position.ok()?.to_logical(f.window.scale_factor());
+    Some((p.x.round(), p.y.round()))
+}
+
+/// Makes the window what `f.spec.collapsed` says (it just changed): the button's size or the
+/// expanded one, with the anchor corner where it was. `from`: the window's place before the change,
+/// if not where it is now. `by_user`: the page asked (an event is written; the spec always is).
+fn set_collapsed(dir: &Path, f: &mut Float, from: Option<(f64, f64)>, by_user: bool) {
+    let on = f.spec.collapsed;
+    let (full, small) = ((f.spec.width, f.spec.height), collapsed_size(&f.spec));
+    let scale = f.window.scale_factor();
+    let actual = |window: &Window| {
+        let s: LogicalSize<f64> = window.inner_size().to_logical(scale);
+        (s.width.round(), s.height.round())
+    };
+    let place = from.or_else(|| position_now(f)).or(f.spec.x.zip(f.spec.y));
+    let (was, now);
+    if on {
+        was = full;
+        hold_size(&f.window, Some(small));
+        f.window.set_inner_size(LogicalSize::new(small.0, small.1));
+        // Windows resizes at once, and may not have given the size asked for: anchor what it gave.
+        now = if cfg!(windows) { actual(&f.window) } else { small };
+    } else {
+        was = if cfg!(windows) { actual(&f.window) } else { small };
+        hold_size(&f.window, None);
+        f.window.set_inner_size(LogicalSize::new(full.0, full.1));
+        now = full;
+    }
+    if let Some((x, y)) = place {
+        let (dx, dy) = anchor_shift(&f.spec.collapse_anchor, was, now);
+        let mut to = (x + dx, y + dy);
+        if !on {
+            // Expanding from a button near a screen's edge: all of the window comes onto that screen.
+            let screens = screens(f.window.available_monitors(), f.window.primary_monitor());
+            to = onto_screen(to, now, (x + was.0 / 2.0, y + was.1 / 2.0), &screens);
+        }
+        f.window.set_outer_position(LogicalPosition::new(to.0, to.1));
+        (f.spec.x, f.spec.y) = (Some(to.0), Some(to.1));
+    }
+    // The size change is ours, not the person's: nothing for `settle` to write.
+    f.resized = None;
+    push_collapsed(f);
+    // On Windows resizing can rewrite the window's styles, and the see-through one with them.
+    show_opacity(dir, f, cfg!(windows));
+    if by_user {
+        let mut event = json!({ "type": if on { "collapsed" } else { "expanded" }, "width": now.0, "height": now.1 });
+        if let (Some(x), Some(y)) = (f.spec.x, f.spec.y) {
+            event["x"] = json!(x);
+            event["y"] = json!(y);
+        }
+        emit(dir, &f.id, event);
+    }
+    remember(dir, f);
+}
+
+fn push_collapsed(f: &Float) {
+    let _ = f.webview.evaluate_script(&format!("window.float && window.float.__collapsed({})", f.spec.collapsed));
 }
 
 /// The window the person is working in overlaps this one (desktop and taskbar don't count).
@@ -869,13 +1209,7 @@ fn settle(dir: &Path, f: &mut Float) {
     let mut changed = false;
     if f.moved.is_some_and(|t| t.elapsed() >= SETTLE) {
         f.moved = None;
-        // Linux without a frame: tao's outer position comes from the window manager's frame extents,
-        // which for an undecorated window under marco are off by the title bar it doesn't have
-        // (every save moved the window 30 px up). Moving it places the content, so read the content.
-        let position = if cfg!(target_os = "linux") && !f.spec.frame { f.window.inner_position() } else { f.window.outer_position() };
-        if let Ok(position) = position {
-            let p: LogicalPosition<f64> = position.to_logical(scale);
-            let (x, y) = (p.x.round(), p.y.round());
+        if let Some((x, y)) = position_now(f) {
             if (Some(x), Some(y)) != (f.spec.x, f.spec.y) {
                 f.spec.x = Some(x);
                 f.spec.y = Some(y);
@@ -883,6 +1217,10 @@ fn settle(dir: &Path, f: &mut Float) {
                 changed = true;
             }
         }
+    }
+    if f.spec.collapsed {
+        // The button's size is not the window's: `width` / `height` stay the expanded size.
+        f.resized = None;
     }
     if f.resized.is_some_and(|t| t.elapsed() >= SETTLE) {
         f.resized = None;
@@ -923,6 +1261,15 @@ fn remember(dir: &Path, f: &Float) {
     spec.insert("height".into(), json!(f.spec.height));
     if f.spec.minimized || spec.contains_key("minimized") {
         spec.insert("minimized".into(), json!(f.spec.minimized));
+    }
+    if f.spec.collapsed || spec.contains_key("collapsed") {
+        spec.insert("collapsed".into(), json!(f.spec.collapsed));
+    }
+    if f.spec.collapsed {
+        // The page may have chosen the button's size: a restart must open the same button.
+        let (w, h) = collapsed_size(&f.spec);
+        spec.insert("collapsedWidth".into(), json!(w));
+        spec.insert("collapsedHeight".into(), json!(h));
     }
     let tmp = dir.join("windows").join(format!("{}.json.tmp", f.id));
     if fs::write(&tmp, Value::Object(spec).to_string()).is_ok() {
@@ -995,5 +1342,106 @@ mod tests {
         assert_eq!((t.x, t.y, t.width, t.height), (Some(-25600.0), Some(-25600.0), 320.0, 240.0));
         let mut t = Spec::default();
         assert!(!fit(&mut t, &SCREENS)); // no place: the system picks one
+    }
+
+    #[test]
+    fn spec_without_the_new_fields_is_as_before() {
+        let s: Spec = serde_json::from_str(r#"{"width":300,"height":200,"behindOpacity":0.4}"#).unwrap();
+        assert_eq!((s.hover_opacity, s.collapsed, s.collapse_anchor.as_str()), (None, false, "top-right"));
+        assert_eq!(shown_size(&s), (300.0, 200.0));
+        let s: Spec = serde_json::from_str(r#"{"width":300,"height":200,"hoverOpacity":1,"collapsed":true,"collapsedWidth":40,"collapsedHeight":36,"collapseAnchor":"bottom-left"}"#).unwrap();
+        assert_eq!((s.hover_opacity, s.collapsed, s.collapse_anchor.as_str()), (Some(1.0), true, "bottom-left"));
+        // Collapsed: the window is the button, `width` / `height` are still the expanded size.
+        assert_eq!((shown_size(&s), s.width, s.height), ((40.0, 36.0), 300.0, 200.0));
+    }
+
+    #[test]
+    fn opacity_order_is_hover_then_behind_then_plain() {
+        let s = Spec { opacity: 0.9, behind_opacity: Some(0.3), hover_opacity: Some(1.0), ..Spec::default() };
+        assert_eq!(wanted_opacity(&s, false, false), 0.9);
+        assert_eq!(wanted_opacity(&s, false, true), 0.3);
+        assert_eq!(wanted_opacity(&s, true, true), 1.0);
+        assert_eq!(wanted_opacity(&s, true, false), 1.0);
+        // Without the field the mouse changes nothing.
+        let s = Spec { opacity: 0.9, behind_opacity: Some(0.3), ..Spec::default() };
+        assert_eq!((wanted_opacity(&s, true, false), wanted_opacity(&s, true, true)), (0.9, 0.3));
+        let s = Spec { hover_opacity: Some(7.0), ..Spec::default() };
+        assert_eq!(wanted_opacity(&s, true, false), 1.0);
+    }
+
+    #[test]
+    fn hover_enters_at_once_and_leaves_after_a_moment() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let (mut hover, mut left) = (false, None);
+        assert!(!hover_step(&mut hover, &mut left, false, false, ms(0)));
+        assert!(hover_step(&mut hover, &mut left, true, false, ms(50)) && hover);
+        assert!(!hover_step(&mut hover, &mut left, true, false, ms(100))); // no change, nothing to do
+        // Out and back in within the delay: never left.
+        assert!(!hover_step(&mut hover, &mut left, false, false, ms(150)));
+        assert!(!hover_step(&mut hover, &mut left, true, false, ms(200)) && hover && left.is_none());
+        // Out for good.
+        assert!(!hover_step(&mut hover, &mut left, false, false, ms(250)));
+        assert!(!hover_step(&mut hover, &mut left, false, false, ms(300)) && hover);
+        assert!(hover_step(&mut hover, &mut left, false, false, ms(400)) && !hover && left.is_none());
+        // Minimized under the mouse: at once.
+        assert!(hover_step(&mut hover, &mut left, true, false, ms(500)));
+        assert!(hover_step(&mut hover, &mut left, false, true, ms(550)) && !hover);
+    }
+
+    #[test]
+    fn collapsed_size_has_a_floor() {
+        let mut s = Spec::default();
+        assert_eq!(collapsed_size(&s), (44.0, 44.0));
+        (s.collapsed_width, s.collapsed_height) = (36.4, 0.0);
+        assert_eq!(collapsed_size(&s), (36.0, 44.0));
+        (s.collapsed_width, s.collapsed_height) = (f64::NAN, -5.0);
+        assert_eq!(collapsed_size(&s), (44.0, 44.0));
+    }
+
+    #[test]
+    fn collapsing_and_expanding_keep_the_anchor_corner() {
+        let (full, small) = ((300.0, 200.0), (44.0, 44.0));
+        for (anchor, there) in [("top-right", (256.0, 0.0)), ("top-left", (0.0, 0.0)), ("bottom-right", (256.0, 156.0)), ("bottom-left", (0.0, 156.0)), ("nonsense", (256.0, 0.0))] {
+            assert_eq!(anchor_shift(anchor, full, small), there, "{anchor}");
+            let back = anchor_shift(anchor, small, full);
+            assert_eq!((there.0 + back.0, there.1 + back.1), (0.0, 0.0), "{anchor}: expanding undoes collapsing");
+        }
+    }
+
+    #[test]
+    fn expanding_comes_back_onto_the_buttons_screen() {
+        let size = (300.0, 200.0);
+        // Room enough: stays.
+        assert_eq!(onto_screen((500.0, 300.0), size, (700.0, 320.0), &SCREENS), (500.0, 300.0));
+        // The button was dragged to the first screen's left edge (anchor top-right: the window would start at -246).
+        assert_eq!(onto_screen((-246.0, 10.0), size, (32.0, 32.0), &SCREENS), (0.0, 10.0));
+        // ... to its bottom-right corner.
+        assert_eq!(onto_screen((1480.0, 830.0), size, (1502.0, 852.0), &SCREENS), (1236.0, 664.0));
+        // On the second screen (to the left): onto that one, not the first.
+        assert_eq!(onto_screen((-2100.0, 1000.0), size, (-1900.0, 1020.0), &SCREENS), (-1920.0, 880.0));
+        // Bigger than the screen: its top-left corner shows.
+        assert_eq!(onto_screen((100.0, 100.0), (2000.0, 900.0), (110.0, 110.0), &SCREENS), (0.0, 0.0));
+        assert_eq!(onto_screen((5.0, 6.0), size, (0.0, 0.0), &[]), (5.0, 6.0));
+    }
+
+    #[test]
+    fn fit_looks_at_the_button_while_collapsed() {
+        // The button sits at the right edge; expanded (300 wide) it would count just the same.
+        let mut t = Spec { collapsed: true, ..spec(1490.0, 10.0, 300.0, 200.0) };
+        assert!(!fit(&mut t, &SCREENS));
+        // A button on no screen comes to the middle; the expanded size is untouched.
+        let mut t = Spec { collapsed: true, ..spec(-25600.0, -25600.0, 300.0, 200.0) };
+        assert!(fit(&mut t, &SCREENS));
+        assert_eq!((t.x, t.y, t.width, t.height), (Some(746.0), Some(410.0), 300.0, 200.0));
+    }
+
+    #[test]
+    fn page_api_starts_in_the_specs_state() {
+        let s = page_api(false, true);
+        assert!(s.starts_with("window.__floatFrameless = true;\nwindow.__floatCollapsed = true;\n"));
+        for name in ["collapse(size)", "expand()", "onCollapsed(fn)", "data-float-drag-click", "data-float-collapsed"] {
+            assert!(s.contains(name), "{name}");
+        }
     }
 }

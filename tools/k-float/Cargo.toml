@@ -1,6 +1,6 @@
 [package]
 name = "k-float"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Opens always-on-top desktop windows (system webview) from spec files. Helper for the k-float mod SDK."
 license = "Apache-2.0"
