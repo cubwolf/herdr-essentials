@@ -108,6 +108,8 @@ k-float --version
 
 ### 收合成按鈕(`collapsed`)
 
+只適合 `frame: false` 的視窗:有系統標題列時,標題列塞不進按鈕的大小。
+
 視窗縮成一個小按鈕(預設 44 × 44),再點一下回到原本的大小。整件事在輔助程式裡,App 沒開也能用。
 
 - **`width` / `height` 永遠是展開時的大小**。收合時視窗是 `collapsedWidth` × `collapsedHeight`,不會寫進 `width` / `height`,也不會有 `resized` 事件。還原就是回到 `width` × `height`。
