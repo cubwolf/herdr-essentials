@@ -67,7 +67,12 @@ export const float = {
   /** Opens a window, or replaces the one with this id.
    *  { id, html, data?, title?, x?, y?, width?, height?, topmost? (true), clickThrough? (false),
    *    opacity? (1: opaque; 0.8 lets a little of what is behind show through),
-   *    frame? (true: the system's title bar), taskbar? (false) }; x, y, width, height in logical pixels. */
+   *    behindOpacity? (the opacity while the person works in a window this one covers; back to
+   *      `opacity` once this one has the focus),
+   *    frame? (true: the system's title bar; without it, elements with data-float-drag move the window,
+   *      its outer 6 pixels resize it, and the page draws its own buttons: float.close(), float.minimize()),
+   *    taskbar? (false), minimized? (false; the helper writes it back, set false to bring the window back) };
+   *  x, y, width, height in logical pixels. */
   async open(spec) {
     const { id, ...rest } = spec ?? {};
     await write(check(id), rest);
@@ -104,6 +109,7 @@ export const float = {
    *    { type: "message", data }                  the page called float.send(data)
    *    { type: "moved", x, y } / { type: "resized", width, height }   by the person, once they let go
    *    { type: "closed", by: "user" | "spec" }
+   *    { type: "minimized" } / { type: "restored" }
    *    { type: "error" | "warning", message }
    *  Each also has `seq` and `t` (milliseconds). Runs as a task of `cx`: it ends with the mod copy.
    *  `replay: true` also delivers what is already in the file. */

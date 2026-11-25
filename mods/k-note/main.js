@@ -17,14 +17,25 @@ const file = () => `${folder()}/note.md`;
 
 // The page: one text area. What is typed goes to the mod (which saves the file) a moment after
 // the last key; text arriving from the file replaces it, unless it is what was just typed.
+// No system title bar: the top strip, in the note's own color, moves the window; its buttons show
+// when the pointer is over the note. The outer few pixels resize it.
 const PAGE = `<!doctype html><meta charset="utf-8">
 <style>
-  html, body { margin: 0; height: 100%; background: #fff7c2; }
-  textarea { box-sizing: border-box; width: 100%; height: 100%; border: 0; outline: 0; resize: none; padding: 10px 12px;
-    background: transparent; color: #3b3200; font: 14px/1.5 system-ui, "Noto Sans CJK TC", "Microsoft JhengHei", sans-serif; }
+  html, body { margin: 0; height: 100%; background: #fff7c2; overflow: hidden; }
+  body { display: flex; flex-direction: column; font: 14px/1.5 system-ui, "Noto Sans CJK TC", "Microsoft JhengHei", sans-serif; }
+  #bar { flex: none; height: 22px; display: flex; justify-content: flex-end; align-items: center; gap: 2px; padding: 0 4px; cursor: move; }
+  #bar button { width: 22px; height: 18px; border: 0; border-radius: 4px; padding: 0; background: transparent; color: #8a7a2e;
+    font: 13px/18px system-ui, sans-serif; cursor: pointer; opacity: 0; transition: opacity .15s; }
+  body:hover #bar button { opacity: 1; }
+  #bar button:hover { background: #f1e6a6; color: #3b3200; }
+  textarea { flex: 1; box-sizing: border-box; width: 100%; border: 0; outline: 0; resize: none; padding: 0 12px 10px;
+    background: transparent; color: #3b3200; font: inherit; }
 </style>
+<div id="bar" data-float-drag><button id="min" title="Minimize">–</button><button id="x" title="Close">✕</button></div>
 <textarea id="note" spellcheck="false" placeholder="Note"></textarea>
 <script>
+  min.onclick = () => float.minimize();
+  x.onclick = () => float.close();
   let sent = null, timer = 0;
   float.onData((d) => {
     if (typeof d.text !== "string" || d.text === note.value || d.text === sent) return;
@@ -41,7 +52,7 @@ const PAGE = `<!doctype html><meta charset="utf-8">
 export default class Note extends View {
   init(_p, cx) {
     this.text = null;          // the file as last read or written here
-    this.error = null; this.through = false;
+    this.error = null; this.through = false; this.minimized = false;
     if (checking()) return;
     float.listen(cx, ID, (e, cx) => this.event(e, cx));
     cx.spawn(async (cx) => {
@@ -51,7 +62,9 @@ export default class Note extends View {
         if (this.text == null) { await writeTextFile(file(), "", null); this.text = ""; }
         let place = {};
         try { place = JSON.parse(localStorage.getItem("place") ?? "{}"); } catch {}
-        await float.open({ id: ID, title: "Note", width: 280, height: 220, ...place, html: PAGE, data: { text: this.text } });
+        // Opaque while in use; see-through while the person works in a window under it.
+        await float.open({ id: ID, title: "Note", width: 280, height: 220, ...place, html: PAGE, data: { text: this.text },
+          frame: false, behindOpacity: 0.35 });
       } catch (e) { this.error = String(e?.message ?? e); }
       cx.notify();
       // The file changed (an agent, a script, an editor): show it.
@@ -86,6 +99,8 @@ export default class Note extends View {
     } else if (e.type === "moved" || e.type === "resized") {
       const spec = await float.get(ID);
       if (spec) localStorage.setItem("place", JSON.stringify({ x: spec.x, y: spec.y, width: spec.width, height: spec.height }));
+    } else if (e.type === "minimized" || e.type === "restored") {
+      this.minimized = e.type === "minimized"; cx.notify();
     } else if (e.type === "closed" && e.by === "user") {
       const overlay = props()?.overlay;
       if (overlay) closeOverlay(overlay);
@@ -106,12 +121,17 @@ export default class Note extends View {
       .text_color(t.foreground).text_size(13)
       .child(h_flex().h(40).px(12).gap(8).items_center()
         .child(div().flex_1().font_semibold().child("Note"))
+        .when(this.minimized, (el) => el.child(button("k-note-show", "Show", (_e, cx) => {
+          this.minimized = false; cx.notify();
+          cx.spawn(async () => { await float.update(ID, { minimized: false }); });
+        }, true)))
         .child(button("k-note-through", "Click-through", (_e, cx) => {
           this.through = !this.through; cx.notify();
           cx.spawn(async () => { await float.update(ID, { clickThrough: this.through }); });
         }, this.through))
         .when(Boolean(p.overlay), (el) => el.child(button("k-note-x", "✕", () => closeOverlay(p.overlay)))))
       .child(div().px(12).pb(10).text_size(11).text_color(this.error ? t.blocked : t.dim)
-        .child(this.error ?? `On the desktop, always on top · ${lines} line${lines === 1 ? "" : "s"} · data/k-note/note.md`));
+        .child(this.error ?? (this.minimized ? `Minimized · Show brings it back · ${lines} line${lines === 1 ? "" : "s"}`
+          : `On the desktop, always on top · ${lines} line${lines === 1 ? "" : "s"} · data/k-note/note.md`)));
   }
 }

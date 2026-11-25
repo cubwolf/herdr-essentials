@@ -78,8 +78,10 @@ k-float --version
 | `topmost` | `true` | 置頂:蓋過其他程式 |
 | `clickThrough` | `false` | 點穿:滑鼠穿過視窗,點到後面的程式。做不到的平台會記一筆 `warning` |
 | `opacity` | `1` | 整個視窗的不透明度,0(看不見)到 1(不透明);`0.8` 就看得到一點後面的程式。字、圖、標題列一起變淡。隨時可以改,不會重新載入頁面。桌面不會疊合視窗時(X11 沒開合成器)記一筆 `warning`,視窗照常顯示成不透明 |
-| `frame` | `true` | 系統的標題列與邊框。`false` 就只剩內容(自己在頁面裡畫關閉鈕) |
+| `behindOpacity` | 沒有 | 使用者在用**被這個視窗蓋住的**視窗時(這個視窗沒有焦點,而作用中的視窗跟它重疊)改用這個不透明度;回到這個視窗(取得焦點)或作用中的視窗移開,就回到 `opacity`。桌面、工作列不算。沒給就一直是 `opacity` |
+| `frame` | `true` | 系統的標題列與邊框。`false` 就只剩內容:頁面裡標了 `data-float-drag` 的元素可以拖著移動,外圈 6 像素拖著改大小,關閉 / 縮小鈕自己畫(`float.close()` / `float.minimize()`) |
 | `taskbar` | `false` | 要不要出現在工作列 |
+| `minimized` | `false` | 縮小了沒。使用者縮小 / 還原時輔助程式寫回來;寫 `false` 就把縮小的視窗叫回來(不搶焦點) |
 
 沒列出的欄位會被忽略,所以可以放自己的東西。
 
@@ -93,7 +95,17 @@ k-float --version
 float.send(value)      // 傳一筆給外面:事件檔多一行 {"type":"message","data":value}
 float.onData(fn)       // spec 的 data 每次改變時呼叫 fn(data);註冊時若已有資料會先叫一次
 float.data             // 目前的 data
+float.close()          // 關掉這個視窗(跟使用者按 × 一樣:事件 closed by user、spec 檔刪掉)
+float.minimize()       // 縮小
 ```
+
+沒有系統標題列(`frame: false`)時:
+
+```html
+<div data-float-drag>拖這一條移動視窗</div>   <!-- 裡面的 button / input / textarea / a 照常能按 -->
+```
+
+外圈 6 像素是改大小的把手(游標會變)。
 
 只讓背景透明、字不變淡(頁面自己用透明底色)沒有做:WebKitGTK 2.52 在透明視窗上重畫時不會先清掉上一張,幾秒內就疊成不透明、舊字也留著(2026-11-25 在 Mint 實測)。
 
@@ -109,7 +121,8 @@ float.data             // 目前的 data
 | `message` | `data` | 頁面呼叫了 `float.send(data)` |
 | `moved` | `x`, `y` | 使用者拖動視窗,放開之後 |
 | `resized` | `width`, `height` | 使用者改視窗大小,放開之後 |
-| `closed` | `by`: `"user"` 或 `"spec"` | 視窗關了。`user` = 使用者按了關閉;`spec` = spec 檔被刪掉 |
+| `closed` | `by`: `"user"` 或 `"spec"` | 視窗關了。`user` = 使用者按了關閉(或頁面呼叫 `float.close()`);`spec` = spec 檔被刪掉 |
+| `minimized` / `restored` | | 視窗縮小 / 還原了(spec 的 `minimized` 同時寫回) |
 | `warning` | `message` | 做不到但不影響其他功能(例:這個平台不支援點穿) |
 | `error` | `message` | spec 解析不了、視窗開不起來、頁面載不進去 |
 
@@ -120,7 +133,7 @@ float.data             // 目前的 data
 
 輔助程式會跟著改 spec 檔的兩種情況:
 
-- 使用者**移動 / 改大小**:把新的 `x` / `y` / `width` / `height` 寫回 spec 檔(其他欄位照舊)。
+- 使用者**移動 / 改大小 / 縮小 / 還原**:把新的 `x` / `y` / `width` / `height` / `minimized` 寫回 spec 檔(其他欄位照舊)。
 - 使用者**關掉視窗**:刪掉 spec 檔。所以「spec 檔還在不在」就是「視窗還開著嗎」。
 
 ## 平台

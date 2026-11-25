@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
-use tao::window::{Window, WindowBuilder, WindowId};
+use tao::window::{ResizeDirection, Window, WindowBuilder, WindowId};
 use wry::{PageLoadEvent, WebContext, WebView, WebViewBuilder};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -28,16 +28,49 @@ const SETTLE: Duration = Duration::from_millis(400);
 const EVENTS_MAX_BYTES: u64 = 256 * 1024;
 const EVENTS_KEEP_LINES: usize = 200;
 
-/// Runs in every page before its own scripts.
+/// Runs in every page before its own scripts (after `window.__floatFrameless` is set).
+/// Messages that start with \u0001 are for the helper (move, resize, close, minimize), not the mod.
 const PAGE_API: &str = r#"
-window.float = {
-  data: undefined,
-  _fns: [],
-  send(value) { window.ipc.postMessage(JSON.stringify(value === undefined ? null : value)); },
-  onData(fn) { this._fns.push(fn); if (this.data !== undefined) fn(this.data); },
-  __data(value) { this.data = value; for (const fn of this._fns) { try { fn(value); } catch (e) { console.error(e); } } },
-};
+(() => {
+  const ctl = (c) => window.ipc.postMessage("\u0001" + c);
+  window.float = {
+    data: undefined,
+    _fns: [],
+    send(value) { window.ipc.postMessage(JSON.stringify(value === undefined ? null : value)); },
+    onData(fn) { this._fns.push(fn); if (this.data !== undefined) fn(this.data); },
+    close() { ctl("close"); },
+    minimize() { ctl("minimize"); },
+    __data(value) { this.data = value; for (const fn of this._fns) { try { fn(value); } catch (e) { console.error(e); } } },
+  };
+  // Without the system's frame the page is the whole window: elements marked data-float-drag move it,
+  // and the outer few pixels resize it.
+  const B = 6, CUR = { n: "ns", s: "ns", e: "ew", w: "ew", ne: "nesw", sw: "nesw", nw: "nwse", se: "nwse" };
+  const edge = (e) => {
+    if (!window.__floatFrameless) return "";
+    const x = e.clientX, y = e.clientY;
+    return (y < B ? "n" : y >= innerHeight - B ? "s" : "") + (x < B ? "w" : x >= innerWidth - B ? "e" : "");
+  };
+  let style = null;
+  addEventListener("mousemove", (e) => {
+    const d = edge(e), css = d ? `*{cursor:${CUR[d]}-resize !important}` : "";
+    if (!style) { if (!css) return; style = document.createElement("style"); (document.head || document.documentElement).appendChild(style); }
+    if (style.textContent !== css) style.textContent = css;
+  }, true);
+  addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const d = edge(e);
+    if (d) { e.preventDefault(); e.stopPropagation(); ctl("resize:" + d); return; }
+    const t = e.target instanceof Element ? e.target : null;
+    if (t && t.closest("[data-float-drag]") && !t.closest("button,input,textarea,select,a,[data-float-nodrag]")) {
+      e.preventDefault(); ctl("drag");
+    }
+  }, true);
+})();
 "#;
+
+fn page_api(frame: bool) -> String {
+    format!("window.__floatFrameless = {};\n{PAGE_API}", !frame)
+}
 
 #[derive(Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase", default)]
@@ -54,6 +87,11 @@ struct Spec {
     frame: bool,
     taskbar: bool,
     opacity: f64,
+    /// Opacity while the person works in a window this one covers (it is not focused and the
+    /// active window overlaps it). None: always `opacity`.
+    behind_opacity: Option<f64>,
+    /// Written here when the person minimizes the window; a mod sets it to false to bring it back.
+    minimized: bool,
 }
 
 impl Default for Spec {
@@ -71,6 +109,8 @@ impl Default for Spec {
             frame: true,
             taskbar: false,
             opacity: 1.0,
+            behind_opacity: None,
+            minimized: false,
         }
     }
 }
@@ -79,6 +119,8 @@ enum UserEvent {
     /// The windows folder as it is now: id -> spec text. Sent only when something changed.
     Specs(HashMap<String, String>),
     Message(String, String),
+    /// From the page to the helper: drag, resize:<n|s|e|w|ne|nw|se|sw>, close, minimize.
+    Control(String, String),
     Loaded(String),
     Tick,
     Stop,
@@ -92,6 +134,14 @@ struct Float {
     /// Position / size changed by the person; written out once they stop moving.
     moved: Option<Instant>,
     resized: Option<Instant>,
+    focused: bool,
+    /// The active window overlaps this one (only looked at while `behind_opacity` is set).
+    behind: bool,
+    /// The opacity the window has now (NaN: not set yet).
+    shown: f64,
+    warned: bool,
+    /// When the spec last asked to minimize / restore: the window's state lags behind for a moment.
+    minimize_asked: Option<Instant>,
 }
 
 fn main() {
@@ -288,12 +338,14 @@ fn run(dir: &Path) -> Result<(), String> {
                         apply(&dir, f, spec);
                     } else {
                         match open(target, &mut context, &proxy, &id, &spec) {
-                            Ok(f) => {
-                                if spec.opacity < 1.0 {
-                                    opacity(&dir, &f);
-                                }
+                            Ok(mut f) => {
+                                show_opacity(&dir, &mut f, false);
                                 if spec.click_through {
                                     click_through(&dir, &f, true);
+                                }
+                                if spec.minimized {
+                                    f.window.set_minimized(true);
+                                    f.minimize_asked = Some(Instant::now());
                                 }
                                 floats.insert(f.window.id(), f);
                             }
@@ -306,6 +358,22 @@ fn run(dir: &Path) -> Result<(), String> {
                 let data = serde_json::from_str::<Value>(&body).unwrap_or(Value::String(body));
                 emit(&dir, &id, json!({ "type": "message", "data": data }));
             }
+            Event::UserEvent(UserEvent::Control(id, cmd)) => {
+                let Some(w) = floats.iter().find(|(_, f)| f.id == id).map(|(w, _)| *w) else { return };
+                let f = &floats[&w];
+                match cmd.as_str() {
+                    "drag" => {
+                        let _ = f.window.drag_window();
+                    }
+                    "minimize" => f.window.set_minimized(true),
+                    "close" => user_closed(&dir, &mut floats, w),
+                    c => {
+                        if let Some(d) = c.strip_prefix("resize:").and_then(resize_direction) {
+                            let _ = f.window.drag_resize_window(d);
+                        }
+                    }
+                }
+            }
             Event::UserEvent(UserEvent::Loaded(id)) => {
                 if let Some(f) = floats.values().find(|f| f.id == id) {
                     push_data(f);
@@ -316,6 +384,12 @@ fn run(dir: &Path) -> Result<(), String> {
             Event::UserEvent(UserEvent::Tick) => {
                 for f in floats.values_mut() {
                     settle(&dir, f);
+                    sync_minimized(&dir, f);
+                    let behind = f.spec.behind_opacity.is_some() && !f.focused && covered_by_active(f);
+                    if behind != f.behind {
+                        f.behind = behind;
+                        show_opacity(&dir, f, false);
+                    }
                 }
                 if floats.is_empty() {
                     if empty_since.elapsed() >= idle_exit {
@@ -326,11 +400,14 @@ fn run(dir: &Path) -> Result<(), String> {
                 }
             }
             Event::WindowEvent { window_id, event, .. } => match event {
-                WindowEvent::CloseRequested => {
-                    if let Some(f) = floats.remove(&window_id) {
-                        // Remove the spec first, so the next pass doesn't reopen it.
-                        let _ = fs::remove_file(dir.join("windows").join(format!("{}.json", f.id)));
-                        emit(&dir, &f.id, json!({ "type": "closed", "by": "user" }));
+                WindowEvent::CloseRequested => user_closed(&dir, &mut floats, window_id),
+                WindowEvent::Focused(on) => {
+                    if let Some(f) = floats.get_mut(&window_id) {
+                        f.focused = on;
+                        if on {
+                            f.behind = false;
+                        }
+                        show_opacity(&dir, f, false);
                     }
                 }
                 WindowEvent::Moved(_) => {
@@ -348,6 +425,29 @@ fn run(dir: &Path) -> Result<(), String> {
             _ => {}
         }
     });
+}
+
+/// The person closed the window (its × or the page's float.close()).
+fn user_closed(dir: &Path, floats: &mut HashMap<WindowId, Float>, w: WindowId) {
+    if let Some(f) = floats.remove(&w) {
+        // Remove the spec first, so the next pass doesn't reopen it.
+        let _ = fs::remove_file(dir.join("windows").join(format!("{}.json", f.id)));
+        emit(dir, &f.id, json!({ "type": "closed", "by": "user" }));
+    }
+}
+
+fn resize_direction(d: &str) -> Option<ResizeDirection> {
+    Some(match d {
+        "n" => ResizeDirection::North,
+        "s" => ResizeDirection::South,
+        "e" => ResizeDirection::East,
+        "w" => ResizeDirection::West,
+        "ne" => ResizeDirection::NorthEast,
+        "nw" => ResizeDirection::NorthWest,
+        "se" => ResizeDirection::SouthEast,
+        "sw" => ResizeDirection::SouthWest,
+        _ => return None,
+    })
 }
 
 /// Polls the windows folder; a handful of small files, so this costs nothing and behaves the same everywhere.
@@ -435,10 +535,15 @@ fn open(
     let webview_builder = WebViewBuilder::new_with_web_context(context)
         // A window that appears must not take the keyboard from what the person is typing in.
         .with_focused(false)
-        .with_initialization_script(PAGE_API)
+        .with_initialization_script(&page_api(spec.frame))
         .with_html(&spec.html)
         .with_ipc_handler(move |request| {
-            let _ = ipc_proxy.send_event(UserEvent::Message(ipc_id.clone(), request.body().clone()));
+            let body = request.body();
+            let event = match body.strip_prefix('\u{1}') {
+                Some(cmd) => UserEvent::Control(ipc_id.clone(), cmd.to_string()),
+                None => UserEvent::Message(ipc_id.clone(), body.clone()),
+            };
+            let _ = ipc_proxy.send_event(event);
         })
         .with_on_page_load_handler(move |event, _url| {
             if matches!(event, PageLoadEvent::Finished) {
@@ -455,7 +560,19 @@ fn open(
     #[cfg(not(target_os = "linux"))]
     let webview = webview_builder.build(&window).map_err(|e| e.to_string())?;
 
-    Ok(Float { id: id.to_string(), spec: spec.clone(), window, webview, moved: None, resized: None })
+    Ok(Float {
+        id: id.to_string(),
+        spec: spec.clone(),
+        window,
+        webview,
+        moved: None,
+        resized: None,
+        focused: false,
+        behind: false,
+        shown: f64::NAN,
+        warned: false,
+        minimize_asked: None,
+    })
 }
 
 /// Brings an open window in line with a changed spec.
@@ -481,6 +598,11 @@ fn apply(dir: &Path, f: &mut Float, spec: Spec) {
     }
     if spec.frame != old.frame {
         f.window.set_decorations(spec.frame);
+        let _ = f.webview.evaluate_script(&format!("window.__floatFrameless = {}", !spec.frame));
+    }
+    if spec.minimized != old.minimized && spec.minimized != f.window.is_minimized() {
+        f.window.set_minimized(spec.minimized);
+        f.minimize_asked = Some(Instant::now());
     }
     if spec.click_through != old.click_through {
         click_through(dir, f, spec.click_through);
@@ -493,31 +615,138 @@ fn apply(dir: &Path, f: &mut Float, spec: Spec) {
     } else if spec.data != old.data {
         push_data(f);
     }
-    // Last: on Windows the changes above rewrite the window's styles, and the see-through one with them.
-    if spec.opacity != old.opacity || (cfg!(windows) && spec.opacity < 1.0) {
-        opacity(dir, f);
+    if spec.behind_opacity.is_none() {
+        f.behind = false;
     }
+    // Last: on Windows the changes above rewrite the window's styles, and the see-through one with them.
+    show_opacity(dir, f, cfg!(windows));
+}
+
+/// Takes the window's minimized state into the spec (the person minimized or restored it).
+fn sync_minimized(dir: &Path, f: &mut Float) {
+    if f.minimize_asked.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+        return;
+    }
+    f.minimize_asked = None;
+    let now = f.window.is_minimized();
+    if now != f.spec.minimized {
+        f.spec.minimized = now;
+        emit(dir, &f.id, json!({ "type": if now { "minimized" } else { "restored" } }));
+        remember(dir, f);
+    }
+}
+
+/// The opacity the window should have now: its `behindOpacity` while the person works in a window it
+/// covers, else its `opacity`.
+fn wanted_opacity(spec: &Spec, behind: bool) -> f64 {
+    let v = match (behind, spec.behind_opacity) {
+        (true, Some(b)) => b,
+        _ => spec.opacity,
+    };
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+fn show_opacity(dir: &Path, f: &mut Float, force: bool) {
+    let value = wanted_opacity(&f.spec, f.behind);
+    // A window never made see-through needs nothing (and on Windows stays out of layered mode).
+    let unchanged = value == f.shown || (f.shown.is_nan() && value >= 1.0);
+    // `force`: on Windows a style change drops the see-through setting; put it back.
+    if unchanged && !(force && value < 1.0) {
+        return;
+    }
+    f.shown = value;
+    if !opacity(f, value) && value < 1.0 && !f.warned {
+        f.warned = true;
+        emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here (the desktop doesn't blend windows): the window is opaque" }));
+    }
+}
+
+/// The window the person is working in overlaps this one (desktop and taskbar don't count).
+#[cfg(windows)]
+fn covered_by_active(f: &Float) -> bool {
+    use tao::platform::windows::WindowExtWindows;
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        l: i32,
+        t: i32,
+        r: i32,
+        b: i32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetForegroundWindow() -> isize;
+        fn GetWindowRect(hwnd: isize, rect: *mut Rect) -> i32;
+        fn GetClassNameW(hwnd: isize, name: *mut u16, len: i32) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
+        fn IsIconic(hwnd: isize) -> i32;
+    }
+    let me = f.window.hwnd();
+    // SAFETY: plain queries about window handles; a stale handle only makes them fail.
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg == 0 || fg == me || IsIconic(fg) != 0 {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, &mut pid);
+        if pid == std::process::id() {
+            return false; // another of our windows
+        }
+        let mut name = [0u16; 64];
+        let n = GetClassNameW(fg, name.as_mut_ptr(), name.len() as i32).max(0) as usize;
+        let class = String::from_utf16_lossy(&name[..n]);
+        if ["Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"].contains(&class.as_str()) {
+            return false;
+        }
+        let (mut a, mut m) = (Rect::default(), Rect::default());
+        if GetWindowRect(fg, &mut a) == 0 || GetWindowRect(me, &mut m) == 0 {
+            return false;
+        }
+        a.l < m.r && m.l < a.r && a.t < m.b && m.t < a.b
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn covered_by_active(f: &Float) -> bool {
+    use gtk::gdk::{self, WindowTypeHint};
+    use gtk::glib::translate::{from_glib_full, ToGlibPtr};
+    use gtk::prelude::{GtkWindowExt, WidgetExt};
+    use tao::platform::unix::WindowExtUnix;
+    let gw = f.window.gtk_window();
+    let (Some(mine), Some(screen)) = (gw.window(), GtkWindowExt::screen(gw)) else { return false };
+    // Deprecated in GTK 3.22 but still answers on X11 (from _NET_ACTIVE_WINDOW); gtk-rs dropped the wrapper.
+    // SAFETY: the screen outlives the call; the result is a new reference (transfer full) or null.
+    let active: Option<gdk::Window> = unsafe { from_glib_full(gdk::ffi::gdk_screen_get_active_window(screen.to_glib_none().0)) };
+    let Some(active) = active else { return false };
+    if active == mine || matches!(active.type_hint(), WindowTypeHint::Desktop | WindowTypeHint::Dock) {
+        return false;
+    }
+    let (a, m) = (active.frame_extents(), mine.frame_extents());
+    a.x() < m.x() + m.width() && m.x() < a.x() + a.width() && a.y() < m.y() + m.height() && m.y() < a.y() + a.height()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn covered_by_active(_f: &Float) -> bool {
+    false
 }
 
 fn push_data(f: &Float) {
     let _ = f.webview.evaluate_script(&format!("window.float && window.float.__data({})", f.spec.data));
 }
 
-/// Makes the whole window (page and frame alike) as see-through as its spec says.
+/// Makes the whole window (page and frame alike) this see-through. False: the desktop can't.
 /// The page can't do this itself with a transparent background: on WebKitGTK 2.52 a page that
 /// repaints over a transparent window paints on top of its last frame, and is opaque within seconds.
-fn opacity(dir: &Path, f: &Float) {
-    let value = if f.spec.opacity.is_finite() { f.spec.opacity.clamp(0.0, 1.0) } else { 1.0 };
+fn opacity(f: &Float, value: f64) -> bool {
     #[cfg(target_os = "linux")]
     {
         use gtk::prelude::WidgetExt;
         use tao::platform::unix::WindowExtUnix;
         let window = f.window.gtk_window();
-        // On X11 it takes a compositing manager; without one the window just stays opaque.
-        if value < 1.0 && !window.screen().is_some_and(|s| s.is_composited()) {
-            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here (the desktop doesn't blend windows): the window is opaque" }));
-        }
         window.set_opacity(value);
+        // On X11 it takes a compositing manager; without one the window just stays opaque.
+        window.screen().is_some_and(|s| s.is_composited())
     }
     #[cfg(windows)]
     {
@@ -533,22 +762,18 @@ fn opacity(dir: &Path, f: &Float) {
         }
         let hwnd = f.window.hwnd();
         // SAFETY: a window this process owns; a bad handle only makes the calls fail.
-        let done = unsafe {
+        unsafe {
             let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
             if style & WS_EX_LAYERED == 0 {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED);
             }
             SetLayeredWindowAttributes(hwnd, 0, (value * 255.0).round() as u8, LWA_ALPHA) != 0
-        };
-        if !done {
-            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here: the window is opaque" }));
         }
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
-        if value < 1.0 {
-            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here: the window is opaque" }));
-        }
+        let _ = (f, value);
+        false
     }
 }
 
@@ -560,11 +785,21 @@ fn click_through(dir: &Path, f: &Float, on: bool) {
 
 /// Once the person stops dragging: say where the window is now, and remember it in the spec.
 fn settle(dir: &Path, f: &mut Float) {
+    if f.window.is_minimized() {
+        // Windows parks a minimized window at -32000: not a place to remember.
+        f.moved = None;
+        f.resized = None;
+        return;
+    }
     let scale = f.window.scale_factor();
     let mut changed = false;
     if f.moved.is_some_and(|t| t.elapsed() >= SETTLE) {
         f.moved = None;
-        if let Ok(position) = f.window.outer_position() {
+        // Linux without a frame: tao's outer position comes from the window manager's frame extents,
+        // which for an undecorated window under marco are off by the title bar it doesn't have
+        // (every save moved the window 30 px up). Moving it places the content, so read the content.
+        let position = if cfg!(target_os = "linux") && !f.spec.frame { f.window.inner_position() } else { f.window.outer_position() };
+        if let Ok(position) = position {
             let p: LogicalPosition<f64> = position.to_logical(scale);
             let (x, y) = (p.x.round(), p.y.round());
             if (Some(x), Some(y)) != (f.spec.x, f.spec.y) {
@@ -602,6 +837,9 @@ fn remember(dir: &Path, f: &Float) {
     }
     spec.insert("width".into(), json!(f.spec.width));
     spec.insert("height".into(), json!(f.spec.height));
+    if f.spec.minimized || spec.contains_key("minimized") {
+        spec.insert("minimized".into(), json!(f.spec.minimized));
+    }
     let tmp = dir.join("windows").join(format!("{}.json.tmp", f.id));
     if fs::write(&tmp, Value::Object(spec).to_string()).is_ok() {
         let _ = fs::rename(&tmp, &path);
