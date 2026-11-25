@@ -50,6 +50,45 @@ function setup(chair, opts = [], list = null) {
 }
 const pick = (next, more = {}) => ({ next, ask: `請 ${next} 說明`, yolo: false, done: false, reason: "輪到他", ...more });
 
+test("一般對話:不經主席,Owner 說一句、agent 答一句;可動手由 Owner 開關;邀第二個人就回到主席制", async () => {
+  const t = setup([pick("beta")], ["--direct"], (d) => [{ space: "alpha", cwd: d.alpha }]);
+  try {
+    assert.equal(t.s().direct, true);
+    assert.match(t.md(), /k-chat 一般對話 · [^\n]*對象:alpha@alpha/);
+    t.start();
+    await t.until("第一個回答", () => t.s().status === "waiting" && t.s().round === 1);
+    assert.deepEqual(L.messages(t.md()).map((m) => m.role), ["owner", "member"]);
+    let calls = t.calls();
+    assert.equal(calls.length, 1, "沒有叫主席");
+    assert.ok(calls[0].args.includes("--tools") && !calls[0].args.includes("--dangerously-skip-permissions"), "預設唯讀");
+    assert.match(calls[0].input, /只有你和他/);
+
+    t.cli("set", t.state, "act=true");
+    t.cli("say", t.state, "那就改吧");
+    await t.until("第二個回答", () => t.s().status === "waiting" && t.s().round === 2);
+    calls = t.calls();
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].args.includes("--dangerously-skip-permissions") && calls[1].args.includes("--resume"), "可動手、接續同一個 session");
+    assert.match(calls[1].input, /Owner 允許你動手/);
+    assert.equal(t.md().split("🔓 Owner 允許 alpha 動手").length, 2);
+
+    // 超過輪數上限也不會自己收尾
+    t.cli("set", t.state, "max_rounds=1", "act=false");
+    t.cli("say", t.state, "再問一題");
+    await t.until("第三個回答", () => t.s().status === "waiting" && t.s().round === 3);
+    assert.ok(!t.calls()[2].args.includes("--dangerously-skip-permissions"), "收回後又是唯讀");
+    assert.ok(!t.md().includes("結論"));
+
+    t.cli("invite", t.state, JSON.stringify({ space: "beta", cwd: t.dirs.beta }));
+    t.cli("say", t.state, "beta 你覺得呢");
+    await t.until("主席點 beta", () => t.s().round === 4);
+    assert.equal(t.s().direct, false);
+    assert.match(t.md(), /不再是一對一/);
+    assert.ok(t.calls().some((c) => c.args.includes("--json-schema")), "現在有主席了");
+  } finally { await t.stop(); }
+  assert.throws(() => L.newState({ repo: "/r", topic: "t", direct: true, list: [{ space: "a", cwd: "/a" }, { space: "b", cwd: "/b" }] }), /剛好一個/);
+});
+
 test("主席自己也說話:先講再點名;自己答得了就直接回 Owner", async () => {
   const t = setup([pick("alpha", { say: "先整理一下:兩個方案差在成本。\n\n## 我的看法\n\n偏向甲。" }), pick("owner", { say: "這題我直接答:用甲。", ask: "同意嗎?" })]);
   try {

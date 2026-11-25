@@ -5,6 +5,8 @@
 //
 //   runner.mjs new --repo DIR --topic NAME --members JSON [--title T] [--space S] [--say TEXT]
 //                  [--max-rounds N] [--chair-agent claude|codex|gemini] [--chair-model M] [--no-yolo]
+//                  [--direct [--act]]   --direct: a plain conversation with the one member, no chair;
+//                                      --act: that agent may change files and run commands
 //                                      make the files, print the state path
 //   runner.mjs list --repo DIR         that repo's discussions, as JSON
 //   runner.mjs start <state.json> [--no-layout]   host it in a herdr-core terminal of its own (hc run --keep); the
@@ -13,7 +15,7 @@
 //   runner.mjs say <state.json> TEXT   the Owner speaks (/stop, /end, @member)
 //   runner.mjs invite <state.json> JSON   add a member: { name?, space, machine?, cwd, agent?, model?, fork? }
 //                                      agent: claude (default) | codex | gemini (the agy CLI)
-//   runner.mjs set <state.json> allow_yolo=false|max_rounds=20|chair_agent=codex|chair_model=haiku
+//   runner.mjs set <state.json> allow_yolo=false|max_rounds=20|chair_agent=codex|chair_model=haiku|act=true
 //   runner.mjs sources                 which of those CLIs this machine has, as JSON
 //   runner.mjs card <state.json> 0,2   open Tide cards for those to-dos of the conclusion
 //   runner.mjs quit <state.json>       the runner leaves (the record stays)
@@ -148,11 +150,18 @@ function host(statePath) {
         try {
           const [m] = L.members([msg.member], s.members.map((x) => x.name));
           m.seen = 0; s.members.push(m);
-          write("chair", `➕ ${m.name}@${m.space} 加入討論(${L.sourceLabel(m)}${m.machine ? `,機器 ${m.machine}` : ""})。`);
+          // A second member: no longer a plain conversation, the chair takes the turns from here.
+          const was = s.direct && s.members.length > 1;
+          if (was) { s.direct = false; s.act = false; s.max_rounds = Math.max(s.max_rounds, s.round + REOPEN); }
+          write("chair", `➕ ${m.name}@${m.space} 加入討論(${L.sourceLabel(m)}${m.machine ? `,機器 ${m.machine}` : ""})。${was ? "\n\n不再是一對一:接下來由主席點名,成員只能讀(要動手由主席授權)。" : ""}`);
         } catch (e) { write("chair", `⚠️ 邀請失敗:${e.message}`); }
       } else if (msg.type === "set") {
         if (typeof msg.allow_yolo === "boolean") { s.allow_yolo = msg.allow_yolo; write("chair", msg.allow_yolo ? "🔐 Owner 允許主席開 YOLO。" : "🔒 Owner 關掉了主席開 YOLO 的權力。"); }
         if (Number(msg.max_rounds) > 0) s.max_rounds = Number(msg.max_rounds);
+        if (typeof msg.act === "boolean") {
+          if (!s.direct) write("chair", "⚠️ 「可動手」只用在一般對話;討論群由主席授權(YOLO)。");
+          else if (msg.act !== Boolean(s.act)) { s.act = msg.act; write("chair", L.actLine(s.members[0]?.name ?? "agent", s.act)); }
+        }
         if (msg.chair_agent || typeof msg.chair_model === "string") {
           try {
             const was = L.source(s.chair.agent), to = msg.chair_agent ? L.source(msg.chair_agent) : was;
@@ -208,6 +217,8 @@ function host(statePath) {
 
   async function round() {
     let turn = s.queue.shift();
+    if (!turn && s.direct) turn = L.directTurn(s);
+    if (s.direct) turn = { ...turn, yolo: Boolean(s.act) };
     if (!turn) {
       now("chair");
       turn = L.turnFrom(s, await chair(L.CHAIR_SCHEMA, L.chairPrompt(s, record())), lastSpeaker());
@@ -224,6 +235,7 @@ function host(statePath) {
     if (r.session) m.session = r.session;
     write(m, r.text || "(沒有回答)");
     m.seen = record().length; s.last = m.name; s.round += 1; s.failures = 0;
+    if (s.direct && !s.queue.length) s.status = "waiting";   // answered: the Owner's turn
   }
 
   (async () => {
@@ -234,7 +246,7 @@ function host(statePath) {
       try {
         if (got.end && s.status !== "done") await conclude("Owner 要求收尾");
         else if (s.status === "running" && !s.members.length) { write("chair", "還沒有成員:先邀請 agent 進來。"); s.status = "waiting"; }
-        else if (s.status === "running" && s.round >= s.max_rounds && !s.queue.length) await conclude(`到了 ${s.max_rounds} 輪上限`);
+        else if (s.status === "running" && !s.direct && s.round >= s.max_rounds && !s.queue.length) await conclude(`到了 ${s.max_rounds} 輪上限`);
         else if (s.status === "running") await round();
         else { now(s.status === "done" ? "done" : "waiting"); await new Promise((r) => setTimeout(r, TICK)); continue; }
       } catch (e) {
@@ -287,6 +299,8 @@ function flags(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === "--no-yolo") o.noYolo = true;
+    else if (a === "--direct") o.direct = true;
+    else if (a === "--act") o.act = true;
     else if (a === "--no-layout") o.noLayout = true;
     else if (a.startsWith("--")) { o[a.slice(2)] = argv[i + 1]; i += 1; }
     else o._.push(a);
@@ -304,7 +318,7 @@ function main() {
       if (!o.repo || !o.topic) throw new Error("new 需要 --repo 與 --topic");
       const repo = path.resolve(o.repo), f = L.files(repo, o.topic);
       if (fs.existsSync(f.json)) throw new Error(`已經有這個主題:${f.json}`);
-      const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo });
+      const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
       fs.mkdirSync(f.inbox, { recursive: true });
       fs.writeFileSync(f.md, L.header(s));
       L.save(f.json, s);
@@ -319,7 +333,7 @@ function main() {
       for (const n of names) {
         try {
           const s = L.load(path.join(dir, n));
-          out.push({ path: path.join(dir, n), title: s.title, status: s.status, round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name), sources: s.members.map((m) => L.sourceLabel(m)) });
+          out.push({ path: path.join(dir, n), title: s.title, status: s.status, direct: Boolean(s.direct), round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name), sources: s.members.map((m) => L.sourceLabel(m)) });
         } catch {}
       }
       console.log(JSON.stringify(out));
@@ -356,6 +370,7 @@ function main() {
       for (const kv of o._.slice(1)) {
         const [k, v] = kv.split("=");
         if (k === "allow_yolo") msg.allow_yolo = v === "true";
+        else if (k === "act") msg.act = v === "true";
         else if (k === "max_rounds") msg.max_rounds = Number(v);
         else if (k === "chair_agent") msg.chair_agent = L.source(v);
         else if (k === "chair_model") msg.chair_model = L.modelName(v) ?? "";
