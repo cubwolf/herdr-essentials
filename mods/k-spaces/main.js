@@ -584,18 +584,22 @@ export default class Spaces extends View {
     const w = r.w;
     if (!this.tabsOpen.has(w.id)) return this.row(r, t);
     const ps = panes();
-    // The same name as its agent's row in k-agents: what another mod gave it in shared
-    // "k-agents.rows" (kirin-tide: "<card>-<title>"), else the tab's own name.
+    // The same name and tag as its agent's row in k-agents: what another mod gave it in shared
+    // "k-agents.rows" (kirin-tide: "<card>-<title>" and the card's status), else the tab's own name.
     const given = shared("k-agents.rows");
-    const rowName = (pane) => {
+    const text = (v) => typeof v === "string" && v.trim() ? v.trim() : null;
+    const rowGiven = (pane) => {
       if (!pane || !given || typeof given !== "object") return null;
       const a = agents().find(x => x.pane === pane.pane);
-      const n = a ? given[a.address]?.name : null;
-      return typeof n === "string" && n.trim() ? n.trim() : null;
+      const g = a ? given[a.address] : null;
+      return g && typeof g === "object" ? g : null;
     };
     const tabRow = (c) => {
       const lead = ps.find(p => p.tab === c.id && p.program?.agent) ?? ps.find(p => p.tab === c.id);
-      const name = rowName(lead) ?? (c.named ? c.name : (lead?.program?.name ?? c.name));
+      const extra = rowGiven(lead);
+      const name = text(extra?.name) ?? (c.named ? c.name : (lead?.program?.name ?? c.name));
+      const tag = text(extra?.tag);
+      const tagColor = t[extra?.color] ?? t.dim;
       const shown = w.active && c.active;
       const marked = this.cursor === c.id;
       return h_flex().id(`tab-${c.id}`).h(24).flex_none().pl(55).pr(4).gap(6).items_center().rounded(6).text_size(12)
@@ -612,6 +616,7 @@ export default class Spaces extends View {
           run("tab.select", { id: c.id });
         })
         .child(div().flex_1().min_w(0).truncate().when(c.settled, el => el.italic()).child(name))
+        .when(Boolean(tag), el => el.child(div().id(`tab-tag-${c.id}`).flex_none().px(5).h(17).rounded(5).bg(tagColor + "26").text_size(10).font_semibold().text_color(tagColor).flex().items_center().child(tag)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(11).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).flex_none().rounded(3).bg(t[c.status])))
         .when(c.settled, el => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child("put away")))
