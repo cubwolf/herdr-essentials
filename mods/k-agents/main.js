@@ -4,6 +4,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify, exec, machines, checking } from "herdr";
+import { modelOf, effortLevel, modelTip } from "./model.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -79,51 +80,10 @@ function icon(p, size, color) {
   return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
 }
 
-// k-agents: the model and effort an agent runs, from its terminal's labels herdr.model /
-// herdr.effort (Claude Code's statusLine writes them: tools/statusline/herdr-statusline.sh), else,
-// for Codex, from its command line (-m / --model, -c model_reasoning_effort=...).
-// The row's icon becomes the model's (one per model, Claude and Codex first) and the effort tints
-// it: nothing for low, a light backing for medium, stronger for high, a ring for xhigh and max.
-const MODELS = [
-  [/opus/i, "opus", "#d97757"],
-  [/sonnet/i, "sonnet", "#5b8def"],
-  [/haiku/i, "haiku", "#3fb37f"],
-  [/fable/i, "fable", "#a970ff"],
-  [/codex/i, "codex", "#10a37f"],
-  [/mini|nano|spark/i, "mini", "#e0a30b"],
-  [/gpt|^o\d/i, "gpt", "#10a37f"],
-];
-function argOf(argv, names) {
-  for (let i = 0; i < argv.length; i++) {
-    const a = String(argv[i]);
-    for (const n of names) {
-      if (a === n && argv[i + 1] != null) return String(argv[i + 1]);
-      if (a.startsWith(`${n}=`)) return a.slice(n.length + 1);
-    }
-  }
-  return null;
-}
-function modelOf(term) {
-  const l = term?.labels ?? {};
-  let model = l["herdr.model"] || null, effort = l["herdr.effort"] || null;
-  // A tab's terminal runs its program under a shell (`sh -ic "$@" … codex`): the program's own
-  // command line is the foreground one.
-  const argv = Array.isArray(term?.foreground?.argv) ? term.foreground.argv : Array.isArray(term?.argv) ? term.argv : [];
-  if (!model && /codex/i.test(String(argv[0] ?? "").split(/[\\/]/).pop())) {
-    model = argOf(argv, ["-m", "--model"]);
-    const cs = argv.flatMap((a, i) => (a === "-c" || a === "--config") ? [String(argv[i + 1] ?? "")] : String(a).startsWith("--config=") ? [String(a).slice(9)] : []);
-    const e = cs.find((c) => /^model_reasoning_effort\s*=/.test(c));
-    if (e) effort = e.split("=").slice(1).join("=").replace(/["'\s]/g, "");
-  }
-  if (!model) return null;
-  const hit = MODELS.find(([re]) => re.test(model));
-  return hit ? { model, effort: effort ? String(effort).toLowerCase() : null, icon: `mods/k-agents/m-${hit[1]}.svg`, color: hit[2] } : { model, effort, icon: null, color: null };
-}
 // The icon slot: the model's icon on an effort tint, or the program's icon as before.
 function modelIcon(m, program, fg) {
   if (!m?.icon) return icon(program, 16, fg);
-  const c = m.color, e = m.effort;
-  const level = e === "max" || e === "xhigh" ? 3 : e === "high" ? 2 : e === "medium" ? 1 : 0;
+  const c = m.color, e = m.effort, level = effortLevel(e);
   return div().size(20).flex_none().flex().items_center().justify_center().rounded(6)
     .when(level === 1, (el) => el.bg(c + "24"))
     .when(level === 2, (el) => el.bg(c + "44"))
@@ -421,7 +381,7 @@ export default class Agents extends View {
     }
 
     const row = (a, i, subs = []) => {
-      const mod = modelOf(byAddress.get(a.address));
+      const mod = modelOf(byAddress.get(a.address), "mods/k-agents");
       const pic = modelIcon(mod, a.program, t.foreground);
       const more = detail.get(a.address);
       // An agent on another machine (`vps/t7`) says which.
@@ -485,7 +445,7 @@ export default class Agents extends View {
         .on_click(() => run("pane.focus", { pane: a.pane }))
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); this.openMenu(a.address); })
         .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
-          .when(Boolean(mod), el => el.tooltip([mod.model, mod.effort].filter(Boolean).join(" · ")))
+          .when(Boolean(mod), el => el.tooltip(modelTip(mod)))
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
             cx.stop_propagation();
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
