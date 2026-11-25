@@ -41,6 +41,7 @@ export default class Chat extends View {
     this.statePath = null; this.state = null; this.record = ""; this.msgs = [];
     this.picked = new Set();  // spaces ticked in the new form / to-dos ticked for cards
     this.inviting = false; this.busy = null; this.error = null; this.yolo = true;
+    this.direct = false; this.letAct = false; // new form: a plain conversation with one agent (no chair); may it change files
     this.scroll = ScrollHandle.new();
     this.topic = InputState.new({ placeholder: "主題(也是檔名),例:k-chat 要不要支援 Codex" });
     this.opening = InputState.new({ placeholder: "開場:要大家討論什麼?" });
@@ -149,11 +150,13 @@ export default class Chat extends View {
     if (!topic || !opening) { this.error = "主題和開場都要填。"; cx.notify(); return; }
     const list = spaces().filter((s) => this.picked.has(s.id))
       .map((s) => ({ name: s.name, space: s.name, machine: s.machine, cwd: s.folder, agent: this.src.get(s.id) ?? "claude", model: this.models.get(s.id)?.value().trim() || null }));
-    if (!list.length) { this.error = "至少邀一個 agent。"; cx.notify(); return; }
+    if (!list.length) { this.error = this.direct ? "選一個要對話的 agent。" : "至少邀一個 agent。"; cx.notify(); return; }
+    if (this.direct && list.length !== 1) { this.error = "一般對話只能選一個 agent。"; cx.notify(); return; }
+    const mode = this.direct ? ["--direct", ...(this.letAct ? ["--act"] : [])] : [];
     this.act("建立討論…", cx, async (cx) => {
       const path = await this.cmd(["new", "--repo", m.folder, "--topic", topic, "--title", topic, "--space", m.name, "--members", JSON.stringify(list), "--say", opening,
         "--chair-agent", this.chairSrc, ...(this.chairModel.value().trim() ? ["--chair-model", this.chairModel.value().trim()] : []),
-        "--max-rounds", String(Number(this.rounds.value()) > 0 ? Number(this.rounds.value()) : 12), ...(this.yolo ? [] : ["--no-yolo"])]);
+        "--max-rounds", String(Number(this.rounds.value()) > 0 ? Number(this.rounds.value()) : 12), ...(this.yolo ? [] : ["--no-yolo"]), ...mode]);
       this.topic.set_value(""); this.opening.set_value("");
       this.statePath = path;
       await this.host();
@@ -217,14 +220,14 @@ export default class Chat extends View {
         top(`Discussions · ${m?.name ?? "(no space)"}`, button("k-chat-new", "New discussion", (_e, cx) => { this.view = "new"; this.picked = new Set(); this.error = null; cx.notify(); }, { primary: true })),
         v_flex().id("k-chat-topics").flex_1().min_h(0).overflow_y_scrollbar().p(8).gap(2)
           .when(!this.topics.length, (el) => el.child(div().p(10).text_size(12).text_color(t.dim)
-            .child(m ? `${m.name} 的 doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來,主席輪流點名。` : "先開一個 Space。")))
+            .child(m ? `${m.name} 的 doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來、主席輪流點名,或只跟一個 agent 一般對話。` : "先開一個 Space。")))
           .children(this.topics.map((x, i) => h_flex().id(`k-chat-topic-${i}`).min_h(40).px(10).gap(10).items_center().rounded(7).cursor_pointer().hover((st) => st.bg(t.hover))
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => this.go(x.path, x.title, cx))
             .child(div().size(8).flex_none().rounded_full().bg(x.status === "running" ? t.working : x.status === "waiting" ? t.blocked : t.done))
             .child(v_flex().flex_1().min_w(0)
               .child(div().truncate().child(x.title))
               .child(div().truncate().text_size(11).text_color(t.dim).child(x.members.map((n, j) => (x.sources?.[j] ? `${n}(${x.sources[j]})` : n)).join("、"))))
-            .child(div().flex_none().text_size(11).text_color(t.dim).child(`${x.status === "done" ? "已結束" : x.status === "waiting" ? "等 Owner" : "進行中"} · ${x.round}/${x.max} 輪`)))),
+            .child(div().flex_none().text_size(11).text_color(t.dim).child(`${x.status === "done" ? "已結束" : x.status === "waiting" ? "等 Owner" : "進行中"} · ${x.direct ? `一般對話 · ${x.round} 則` : `${x.round}/${x.max} 輪`}`)))),
         note());
     }
 
@@ -237,6 +240,12 @@ export default class Chat extends View {
           .child(field(this.topic))
           .child(field(this.opening))
           .child(h_flex().gap(10).items_center()
+            .child(button("k-chat-mode-group", "討論群(主席點名)", (_e, cx) => { this.direct = false; cx.notify(); }, { on: !this.direct, tip: "幾個 agent 一起談,主席決定誰發言" }))
+            .child(button("k-chat-mode-direct", "一般對話(一對一)", (_e, cx) => { this.direct = true; if (this.picked.size > 1) this.picked = new Set(); cx.notify(); }, { on: this.direct, tip: "只跟一個 agent 對話:你說一句、它答一句,不經主席;紀錄一樣存在 doc/chat/" }))
+            .when(this.direct, (el) => el.child(button("k-chat-act-new", this.letAct ? "可動手:開" : "可動手:關", (_e, cx) => { this.letAct = !this.letAct; cx.notify(); },
+              { on: this.letAct, tip: "關:它只能讀檔、搜尋、查網頁。開:它可以改檔、跑指令(不問權限),到你關掉為止" }))))
+          .when(!this.direct, (form) => form
+          .child(h_flex().gap(10).items_center()
             .child(div().text_size(12).text_color(t.muted).child("輪數上限"))
             .child(field(this.rounds).w(70))
             .child(button("k-chat-yolo-new", this.yolo ? "允許主席開 YOLO:開" : "允許主席開 YOLO:關", (_e, cx) => { this.yolo = !this.yolo; cx.notify(); },
@@ -244,14 +253,14 @@ export default class Chat extends View {
           .child(h_flex().gap(10).items_center()
             .child(div().text_size(12).text_color(t.muted).child("主席"))
             .child(chips("k-chat-chair", this.chairSrc, null, (src, cx) => { this.chairSrc = src; this.chairModel.set_value(src === "claude" ? "sonnet" : ""); cx.notify(); }))
-            .child(field(this.chairModel).w(190)))
-          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(`邀請(${this.picked.size})· 每位可以選模型來源`))
+            .child(field(this.chairModel).w(190))))
+          .child(div().pt(6).text_size(11).font_semibold().text_color(t.muted).child(this.direct ? "跟誰對話(選一個)· 可以選模型來源" : `邀請(${this.picked.size})· 每位可以選模型來源`))
           .children(all.map((sp, i) => {
             const on = this.picked.has(sp.id);
             return h_flex().gap(8).items_center()
               .child(tick(`k-chat-pick-${i}`, on, sp.name, `${sp.machine ? `${sp.machine} · ` : ""}${sp.folder}`, (_e, cx) => {
                 if (on) this.picked.delete(sp.id);
-                else { this.picked.add(sp.id); if (!this.models.has(sp.id)) this.models.set(sp.id, InputState.new({ placeholder: "模型(空白 = 預設)" })); }
+                else { if (this.direct) this.picked = new Set(); this.picked.add(sp.id); if (!this.models.has(sp.id)) this.models.set(sp.id, InputState.new({ placeholder: "模型(空白 = 預設)" })); }
                 cx.notify();
               }).flex_1().min_w(0))
               .when(on, (el) => el
@@ -269,7 +278,7 @@ export default class Chat extends View {
     const secs = Math.max(0, Math.round((Date.now() - (now.since ?? Date.now())) / 1000));
     const status = !s ? "讀取中…"
       : !hosted ? "主持程式沒在跑"
-        : now.phase === "member" ? `${now.who} 發言中${now.yolo ? " 🔓 YOLO" : ""} · ${secs}s`
+        : now.phase === "member" ? `${now.who} ${s.direct ? "回答中" : "發言中"}${now.yolo ? (s.direct ? " 🔓 可動手" : " 🔓 YOLO") : ""} · ${secs}s`
           : now.phase === "chair" ? `主席在想誰發言 · ${secs}s`
             : now.phase === "conclude" ? `主席在寫結論 · ${secs}s`
               : s.status === "done" ? "已結束(再發言會重新開始)" : s.status === "waiting" ? "等 Owner 發言" : "…";
@@ -279,10 +288,13 @@ export default class Chat extends View {
 
     return shell(
       top(s?.title ?? "…",
-        div().flex_none().text_size(11).text_color(t.dim).child(s ? `${s.round}/${s.max_rounds} 輪` : ""),
-        button("k-chat-yolo", s?.allow_yolo ? "YOLO 可開" : "YOLO 關", (_e, cx) => this.act("設定…", cx, () => this.cmd(["set", this.statePath, `allow_yolo=${!s?.allow_yolo}`])),
-          { on: Boolean(s?.allow_yolo), off: !s, tip: "允許主席讓某個成員某一輪動手改檔" }),
-        button("k-chat-invite", "Invite", (_e, cx) => { this.inviting = !this.inviting; cx.notify(); }, { on: this.inviting, off: !s }),
+        div().flex_none().text_size(11).text_color(t.dim).child(s ? (s.direct ? "一般對話" : `${s.round}/${s.max_rounds} 輪`) : ""),
+        s?.direct
+          ? button("k-chat-act", s.act ? "可動手" : "只能讀", (_e, cx) => this.act("設定…", cx, () => this.cmd(["set", this.statePath, `act=${!s.act}`])),
+            { on: Boolean(s.act), tip: "只能讀:讀檔、搜尋、查網頁。可動手:它可以改檔、跑指令(不問權限),到你關掉為止" })
+          : button("k-chat-yolo", s?.allow_yolo ? "YOLO 可開" : "YOLO 關", (_e, cx) => this.act("設定…", cx, () => this.cmd(["set", this.statePath, `allow_yolo=${!s?.allow_yolo}`])),
+            { on: Boolean(s?.allow_yolo), off: !s, tip: "允許主席讓某個成員某一輪動手改檔" }),
+        button("k-chat-invite", "Invite", (_e, cx) => { this.inviting = !this.inviting; cx.notify(); }, { on: this.inviting, off: !s, tip: s?.direct ? "再邀一個 agent 進來:就變成討論群,由主席點名" : "邀請別的 Space 的 agent、換主席" }),
         button("k-chat-stop", "Stop", (_e, cx) => this.send("/stop", cx), { off: !active, tip: "中止現在這一輪(/stop)" }),
         button("k-chat-end", "Wrap up", (_e, cx) => this.send("/end", cx), { off: !s || s.status === "done", tip: "請主席現在寫結論(/end)" })),
       h_flex().h(28).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border).text_size(11.5)
@@ -308,7 +320,7 @@ export default class Chat extends View {
           .bg(x.role === "owner" ? `${t.accent}1f` : x.role === "chair" ? `${t.background}00` : t.raised ?? t.hover)
           .when(x.role === "chair", (el) => el.border_1().border_color(t.border))
           .child(h_flex().gap(8).items_center().text_size(11)
-            .child(div().font_semibold().text_color(x.role === "owner" ? t.accent : x.role === "chair" ? t.muted : tint(x.who)).child(x.who))
+            .child(div().font_semibold().text_color(x.role === "owner" ? t.accent : x.role === "chair" ? t.muted : tint(x.who)).child(x.role === "chair" && s?.direct ? "k-chat" : x.who))
             .when(x.role === "member" && Boolean(bySource(x.who)), (el) => el.child(div().px(5).rounded(4).border_1().border_color(t.border).text_color(t.muted).child(bySource(x.who))))
             .child(div().text_color(t.dim).child(x.time))
             .when(x.text.includes("🔓"), (el) => el.child(div().px(5).rounded(4).bg(`${t.blocked}33`).text_color(t.blocked).child("YOLO"))))

@@ -65,9 +65,13 @@ export function members(list, taken = []) {
   });
 }
 
-export function newState({ repo, topic, title, space, list, chairAgent, chairModel, maxRounds, allowYolo }) {
+// direct: a plain conversation, the Owner and one agent, no chair (a second member brings the chair back).
+// act: in a direct conversation, whether that agent may change files and run commands (the Owner's switch).
+export function newState({ repo, topic, title, space, list, chairAgent, chairModel, maxRounds, allowYolo, direct, act }) {
   const agent = source(chairAgent);
+  if (direct && (list ?? []).length !== 1) throw new Error("一般對話要剛好一個 agent");
   return {
+    direct: Boolean(direct), act: Boolean(direct && act),
     k_chat: 1, topic: slug(topic), title: title || topic, repo, space: space || path.basename(repo),
     chair: { agent, model: modelName(chairModel) ?? SOURCES[agent].chair }, allow_yolo: allowYolo !== false, max_rounds: Number(maxRounds) > 0 ? Number(maxRounds) : 12,
     round: 0, status: "running", now: { phase: "idle", who: null, since: Date.now() },
@@ -77,13 +81,17 @@ export function newState({ repo, topic, title, space, list, chairAgent, chairMod
 
 // The record. Headings are the chat plugin's (porthole's #chat reads "## 🧑 Human" and
 // "## 🤖 Assistant"); who spoke comes after the role.
-export const header = (s, d = new Date()) =>
-  `# Chat: ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
+export const header = (s, d = new Date()) => s.direct
+  ? `# Chat: ${s.title}\n\n> k-chat 一般對話 · 開始於 ${day(d)} ${clock(d)} · 對象:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、")}\n`
+  : `# Chat: ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
 export const entry = (who, text, d = new Date()) => {
   const head = who === "owner" ? "🧑 Human" : who === "chair" ? "🤖 Assistant · 🪑 主席" : `🤖 Assistant · ${who.name}@${who.space}`;
   // What someone said can't start a new message: its own # and ## headings go down to ###.
   return `\n## ${head} · ${clock(d)}\n\n${String(text).trim().replace(/^#{1,2}(?=\s)/gm, "###")}\n`;
 };
+export const actLine = (name, on) => (on ? `🔓 Owner 允許 ${name} 動手(改檔、跑指令),到關掉為止。` : `🔒 Owner 收回了 ${name} 動手的權限:只能讀。`);
+// A direct conversation's next turn: whoever the Owner is talking to answers what he just said.
+export const directTurn = (s) => ({ next: (s.members.find((m) => m.name === s.last) ?? s.members[0])?.name ?? "owner", ask: "", yolo: false, done: false, reason: "", from: "owner" });
 export const yoloLine = (name, reason) => `🔓 主席授權 ${name} YOLO:${String(reason || "要動手實作").replace(/\s+/g, " ").trim()}`;
 
 // The record as messages, for the mod: [{ role: "owner" | "chair" | "member", who, time, text }].
@@ -184,6 +192,21 @@ todos 把待辦逐項列出:title 一句話,repo 填負責的成員的 Space 名
 export function memberPrompt(s, m, record, turn) {
   const first = !m.session;
   const since = record.slice(Math.min(m.seen ?? 0, record.length));
+  if (s.direct) {
+    const rules = `Owner(人)要跟你對話,主題「${s.title}」。你的名字是 ${m.name}(Space「${m.space}」,你在自己的資料夾 ${m.cwd} 裡)。只有你和他,沒有別的成員。
+
+怎麼回答:
+- 你的回答會原樣寫進對話紀錄(doc/chat 底下的 Markdown),所以直接講內容,不要寒暄、不要重述問題。
+- 用繁體中文,先講結論,再講依據。需要的話先讀你資料夾裡的檔案再回答,引用時寫出檔案路徑。不知道就說不知道。
+`;
+    return `${first ? `${rules}\n` : ""}${first ? "到目前為止的對話紀錄" : "你上次回答之後的對話紀錄"}:
+<record>
+${tail(since) || "(沒有新的)"}
+</record>
+
+回答 Owner 上面說的話。
+${turn.yolo ? "\nOwner 允許你動手:可以改檔、跑指令,只做他要求的範圍,做完回報改了哪些檔。" : "\n你現在只能讀(讀檔、搜尋、查網頁),不要嘗試改檔或跑指令;Owner 要你動手時,告訴他先把「可動手」打開。"}`;
+  }
   const intro = `你被邀請進一場多 agent 討論「${s.title}」,你的名字是 ${m.name}(Space「${m.space}」,你在自己的資料夾 ${m.cwd} 裡)。Owner(人)主持,主席決定誰發言。
 
 成員:

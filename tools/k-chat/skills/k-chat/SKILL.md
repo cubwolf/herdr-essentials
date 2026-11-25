@@ -31,6 +31,7 @@ node ${CLAUDE_PLUGIN_ROOT}/runner.mjs <指令> …
 | `start <state.json>` | 在 herdr-core 開一個自己的 terminal 來主持(`hc run --keep`,不佔側欄),並在 Herdr App 的排版加一個對話 tab「💬 主題」。關掉你這個 session、關掉 App 視窗都照跑 |
 | `run <state.json>` | 就在目前這個 terminal 主持(前景,會一直跑)。沒有 herdr-core 時用 |
 | `list --repo <主 repo>` | 這個 repo 的討論(JSON) |
+| `new … --members '<只有一個>' --direct [--act]` | **一般對話**:只跟那一個 agent 對話,不經主席(Owner 說一句、它答一句,然後等 Owner);沒有輪數上限。`--act` = 它可以改檔、跑指令(預設只能讀);之後用 `set <state.json> act=true|false` 開關。再 `invite` 一個人就變回主席制 |
 | `say <state.json> <文字>` | 替 Owner 發言。`@成員` = 他下一個發言(不經主席);`/stop` = 中止現在這一輪;`/end` = 請主席現在寫結論 |
 | `invite <state.json> '<成員 JSON>'` | 中途加人 |
 | `set <state.json> allow_yolo=false` / `max_rounds=20` / `chair_agent=codex` / `chair_model=haiku` | 改設定(換來源時,模型回到那個來源的預設) |
