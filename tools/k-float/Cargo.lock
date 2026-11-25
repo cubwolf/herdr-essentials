@@ -1053,6 +1053,7 @@ name = "k-float"
 version = "0.1.0"
 dependencies = [
  "fs4",
+ "gtk",
  "libc",
  "serde",
  "serde_json",

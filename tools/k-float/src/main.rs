@@ -53,6 +53,7 @@ struct Spec {
     click_through: bool,
     frame: bool,
     taskbar: bool,
+    opacity: f64,
 }
 
 impl Default for Spec {
@@ -69,6 +70,7 @@ impl Default for Spec {
             click_through: false,
             frame: true,
             taskbar: false,
+            opacity: 1.0,
         }
     }
 }
@@ -287,6 +289,9 @@ fn run(dir: &Path) -> Result<(), String> {
                     } else {
                         match open(target, &mut context, &proxy, &id, &spec) {
                             Ok(f) => {
+                                if spec.opacity < 1.0 {
+                                    opacity(&dir, &f);
+                                }
                                 if spec.click_through {
                                     click_through(&dir, &f, true);
                                 }
@@ -488,10 +493,63 @@ fn apply(dir: &Path, f: &mut Float, spec: Spec) {
     } else if spec.data != old.data {
         push_data(f);
     }
+    // Last: on Windows the changes above rewrite the window's styles, and the see-through one with them.
+    if spec.opacity != old.opacity || (cfg!(windows) && spec.opacity < 1.0) {
+        opacity(dir, f);
+    }
 }
 
 fn push_data(f: &Float) {
     let _ = f.webview.evaluate_script(&format!("window.float && window.float.__data({})", f.spec.data));
+}
+
+/// Makes the whole window (page and frame alike) as see-through as its spec says.
+/// The page can't do this itself with a transparent background: on WebKitGTK 2.52 a page that
+/// repaints over a transparent window paints on top of its last frame, and is opaque within seconds.
+fn opacity(dir: &Path, f: &Float) {
+    let value = if f.spec.opacity.is_finite() { f.spec.opacity.clamp(0.0, 1.0) } else { 1.0 };
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::WidgetExt;
+        use tao::platform::unix::WindowExtUnix;
+        let window = f.window.gtk_window();
+        // On X11 it takes a compositing manager; without one the window just stays opaque.
+        if value < 1.0 && !window.screen().is_some_and(|s| s.is_composited()) {
+            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here (the desktop doesn't blend windows): the window is opaque" }));
+        }
+        window.set_opacity(value);
+    }
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::WindowExtWindows;
+        const GWL_EXSTYLE: i32 = -20;
+        const WS_EX_LAYERED: isize = 0x0008_0000;
+        const LWA_ALPHA: u32 = 2;
+        #[link(name = "user32")]
+        extern "system" {
+            fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+            fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
+            fn SetLayeredWindowAttributes(hwnd: isize, key: u32, alpha: u8, flags: u32) -> i32;
+        }
+        let hwnd = f.window.hwnd();
+        // SAFETY: a window this process owns; a bad handle only makes the calls fail.
+        let done = unsafe {
+            let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if style & WS_EX_LAYERED == 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED);
+            }
+            SetLayeredWindowAttributes(hwnd, 0, (value * 255.0).round() as u8, LWA_ALPHA) != 0
+        };
+        if !done {
+            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here: the window is opaque" }));
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        if value < 1.0 {
+            emit(dir, &f.id, json!({ "type": "warning", "message": "opacity is not supported here: the window is opaque" }));
+        }
+    }
 }
 
 fn click_through(dir: &Path, f: &Float, on: bool) {

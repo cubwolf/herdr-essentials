@@ -66,6 +66,7 @@ function events(text) {
 export const float = {
   /** Opens a window, or replaces the one with this id.
    *  { id, html, data?, title?, x?, y?, width?, height?, topmost? (true), clickThrough? (false),
+   *    opacity? (1: opaque; 0.8 lets a little of what is behind show through),
    *    frame? (true: the system's title bar), taskbar? (false) }; x, y, width, height in logical pixels. */
   async open(spec) {
     const { id, ...rest } = spec ?? {};

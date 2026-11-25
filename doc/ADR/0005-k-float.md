@@ -69,6 +69,7 @@ await float.open({
   x: 40, y: 40, width: 280, height: 220,
   topmost: true,                    // 預設 true
   clickThrough: false,
+  opacity: 1,             // 整個視窗的不透明度 0–1(2026-11-25 加)
   title: "Note",
 });
 
@@ -80,7 +81,7 @@ await float.close("note");
 - 頁面那一側,輔助程式會注入 `window.float`:
   - `float.send(data)`:傳一筆訊息回 mod(任何可轉成 JSON 的值)。
   - `float.onData(fn)`:mod 用 `update(id, { data })` 送來新資料時呼叫。只換資料、不重新載入頁面,輸入到一半的字不會掉。
-- `update(id, { html })` 會重新載入整頁;`update(id, { data })` 不會。位置、大小、`topmost`、`clickThrough` 也都可以 `update`。
+- `update(id, { html })` 會重新載入整頁;`update(id, { data })` 不會。位置、大小、`topmost`、`clickThrough`、`opacity` 也都可以 `update`。
 
 ### 4. 檔案協定(細節在 `doc/k-float-protocol.md`)
 
