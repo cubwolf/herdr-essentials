@@ -89,6 +89,21 @@ if [ -e "$KJ" ]; then
 else
   echo "keys: 還沒有 keys.json(用內建預設),k-pick 沒加快捷鍵:先在 Settings 改一個快捷鍵讓它產生再重跑" >&2
 fi
+# k-chrome 的來回導覽(照 Eclipse):alt-left / alt-right 回到上一個 / 下一個看過的 session,ctrl-q 回到最後輸入的 session。
+# 沒綁的加上;alt-left / alt-right 還是內建預設的 pane.go(alt-h / alt-l 也是它)就換掉;綁了別的不動。
+navkey() { # <鍵> <指令> [可以換掉的預設]
+  if [ ! -e "$KJ" ]; then return
+  elif grep -q "\"$1\": *\"$2\"" "$KJ"; then :
+  elif [ -n "${3:-}" ] && grep -q "\"$1\": *\"$3\"" "$KJ"; then
+    sed -i.bak -E "s/\"$1\": *\"$3\"/\"$1\": \"$2\"/" "$KJ" && rm -f "$KJ.bak"; echo "keys: $1 從 $3 改成 $2"
+  elif grep -q "\"$1\"" "$KJ"; then echo "keys: $1 已綁別的,沒改成 $2(自己在 keys.json 改)" >&2
+  elif grep -qE '"global": *\{[[:space:]]*$' "$KJ"; then
+    sed -i.bak -E "s/(\"global\": *\{)/\\1\n    \"$1\": \"$2\",/" "$KJ" && rm -f "$KJ.bak"; echo "keys: $1 → $2"
+  else echo "keys: keys.json 的 global 格式認不得,自己加 \"$1\": \"$2\"" >&2; fi
+}
+navkey alt-left k-chrome.back pane.go:left
+navkey alt-right k-chrome.forward pane.go:right
+navkey ctrl-q k-chrome.last-input
 # Claude Code 的 statusLine 回報器:把模型、強度寫成 terminal 標籤,k-agents 的 Agents 列換 icon / 底色。
 # 只在 ~/.claude/settings.json 還沒有 statusLine 時加;已有別的就不動,只提醒。要 node 改 JSON。
 SL="$HERE/tools/statusline/herdr-statusline.sh"
