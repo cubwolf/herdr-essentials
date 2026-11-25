@@ -1,7 +1,7 @@
 // node --test tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chipsFor, modsIn, safeUrl } from "../mods/k-pane/core.js";
+import { chipsFor, modsIn, safeUrl, placeOf } from "../mods/k-pane/core.js";
 
 const layout = { children: [
   { content: { mod: "cards" } },
@@ -35,4 +35,15 @@ test("chipsFor: anything else in there is ignored", () => {
 test("safeUrl: http and https only", () => {
   assert.equal(safeUrl("https://x.test/a?b=1&c=2#d"), "https://x.test/a?b=1&c=2#d");
   for (const u of ["file:///etc/passwd", "javascript:alert(1)", "http://x.test/ a", 'http://x.test/"', "", null, 5]) assert.equal(safeUrl(u), null, String(u));
+});
+
+test("placeOf: the machine and the space of a pane's tab", () => {
+  const spaces = [
+    { name: "kelp", machine: null, tabs: [{ id: "tb1" }] },
+    { name: "aura-stream", machine: "back", tabs: [{ id: "back/tb2" }, { id: "back/tb3" }] },
+  ];
+  assert.deepEqual(placeOf(spaces, "back/tb3"), { machine: "back", space: "aura-stream" });
+  assert.deepEqual(placeOf(spaces, "tb1"), { machine: null, space: "kelp" });
+  assert.deepEqual(placeOf(spaces, "gone"), { machine: null, space: "" });
+  assert.deepEqual(placeOf(null, "tb1"), { machine: null, space: "" });
 });
