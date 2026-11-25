@@ -1,14 +1,15 @@
 // k-pane (herdr-essentials): Herdr's built-in `pane` header (herdr-app 0.1.18, Apache-2.0), plus
 // what other mods put in it: shared "k-pane.chips", see core.js. A header without chips is the
 // built-in one, except: an agent whose model is known shows the model's icon (maker and tier, tinted
-// by effort: model.js, the same icons as k-agents) instead of the program's icon and name, and the
-// folder is no longer written out: it is in the tooltip of the icon / name. Layout: { "pane": { "header": { "content": { "mod": "k-pane" } } } }.
+// by effort: model.js, the same icons as k-agents) instead of the program's icon and name; then
+// where it is: the machine (another one only) and the space (the repo). The folder is no longer
+// written out: it is in the tooltip of all that. Layout: { "pane": { "header": { "content": { "mod": "k-pane" } } } }.
 // Props from the app: { pane, terminal }. Click: focus the pane; a chip with a url: open it.
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, terminals, props, run, theme, home, layout, shared } from "herdr";
-import { chipsFor, modsIn } from "./core.js";
+import { panes, terminals, spaces, props, run, theme, home, layout, shared } from "herdr";
+import { chipsFor, modsIn, placeOf } from "./core.js";
 import { modelOf, effortLevel, modelTip } from "./model.js";
 
 // Match the first visible tab frame, including the active child of a stack.
@@ -103,6 +104,7 @@ export default class Pane extends View {
     const known = Boolean(m?.icon);
     const name = p.name || (known ? "" : ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell");
     const pic = known ? modelIcon(m) : icon(p.program, 14, t.dim);
+    const at = placeOf(spaces(), p.tab);
     const tip = [known ? [p.program?.name, modelTip(m)].filter(Boolean).join(" \u00b7 ") : "", folder(p.cwd)].filter(Boolean).join("\n");
     const st = p.status;
     const pane = p.pane;
@@ -125,7 +127,9 @@ export default class Pane extends View {
       .child(h_flex().id(`pane-who-${pane}`).flex_none().gap(8).items_center()
         .when(Boolean(tip), el => el.tooltip(tip))
         .when(Boolean(pic), (el) => el.child(pic))
-        .when(Boolean(name), el => el.child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))))
+        .when(Boolean(at.machine), el => el.child(div().flex_none().text_size(10.5).text_color(t.dim).child(at.machine)))
+        .when(Boolean(at.space), el => el.child(div().flex_none().truncate().max_w(200).font_medium().text_color(t.foreground).child(at.space)))
+        .when(Boolean(name) && name !== at.space, el => el.child(div().flex_none().truncate().max_w(260).text_color(at.space ? t.muted : t.foreground).when(!at.space, x => x.font_medium()).child(name))))
       .children(chips.map(c => this.chip(t, pane, c)))
       // Without chips: keep the status and the buttons at the right end.
       .when(chips.length === 0, el => el.child(div().flex_1()))

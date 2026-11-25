@@ -19,6 +19,13 @@ export function modsIn(node, out = new Set()) {
   return out;
 }
 
+// Where a pane is: the machine its space lives on (null: this computer) and the space's name (the
+// repo, unless someone named it). `tab` is the pane's tab id.
+export function placeOf(spaces, tab) {
+  const s = (Array.isArray(spaces) ? spaces : []).find((x) => (x?.tabs ?? []).some((t) => t?.id === tab));
+  return s ? { machine: s.machine || null, space: str(s.name, 80) } : { machine: null, space: "" };
+}
+
 export function safeUrl(url) {
   return typeof url === "string" && /^https?:\/\/[^\s"'<>\\^`{|}]+$/i.test(url) ? url : null;
 }
