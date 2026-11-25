@@ -25,6 +25,7 @@ public class KFloatWin {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int index);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool GetLayeredWindowAttributes(IntPtr h, out uint key, out byte alpha, out uint flags);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -35,6 +36,11 @@ public class KFloatWin {
 "@
 function win { [KFloatWin]::FindWindow([NullString]::Value, "k-float-smoke") }   # $null would arrive as "", which matches no window class
 function exstyle { [KFloatWin]::GetWindowLong((win), -20) }
+# The window's opacity as Windows has it (0-255), or -1 when it has none.
+function alpha {
+  $key = [uint32]0; $a = [byte]0; $flags = [uint32]0
+  if ([KFloatWin]::GetLayeredWindowAttributes((win), [ref]$key, [ref]$a, [ref]$flags) -and ($flags -band 2)) { [int]$a } else { -1 }
+}
 
 $html = "<body style='font:16px sans-serif;background:#fff7c2;margin:14px'><b>k-float smoke test</b><h3 id=h>hello</h3><p style='font-size:12px'>closes itself</p><script>float.onData(d=>{h.textContent='count '+d.count;float.send({got:d.count})})</script></body>"
 $s = @{ title = "k-float-smoke"; x = 160; y = 160; width = 300; height = 170; html = $html; data = @{ count = 1 } }
@@ -84,10 +90,20 @@ if ($Shot) {
   Write-Output "     shot: $Shot"
 }
 
+$s.opacity = 0.6; spec $s
+Start-Sleep -Milliseconds 1200
+check "opacity 0.6 (layered window, alpha $(alpha) of 255)" ((alpha) -eq 153)
+check "no reload on opacity update" (@(events | Where-Object { $_.Contains('"type":"ready"') }).Count -eq 1)
+
 $s.clickThrough = $true; spec $s
 Start-Sleep -Milliseconds 1200
 check "click-through (WS_EX_TRANSPARENT)" (((exstyle) -band 0x20) -ne 0)
-check "no warning about click-through" (-not (events | Where-Object { $_.Contains('"type":"warning"') }))
+# Turning click-through on or off rewrites the window's styles: the opacity must survive both.
+check "opacity kept with click-through on (alpha $(alpha))" ((alpha) -eq 153)
+$s.clickThrough = $false; spec $s
+Start-Sleep -Milliseconds 1200
+check "opacity kept with click-through off again (alpha $(alpha))" ((alpha) -eq 153)
+check "no warning about click-through or opacity" (-not (events | Where-Object { $_.Contains('"type":"warning"') }))
 
 Remove-Item "$D\windows\demo.json"
 Start-Sleep -Milliseconds 1200

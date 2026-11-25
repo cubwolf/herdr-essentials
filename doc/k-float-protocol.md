@@ -62,6 +62,7 @@ k-float --version
   "x": 40, "y": 40, "width": 320, "height": 240,
   "topmost": true,
   "clickThrough": false,
+  "opacity": 1,
   "frame": true,
   "taskbar": false
 }
@@ -76,6 +77,7 @@ k-float --version
 | `width`, `height` | 320 × 240 | 內容區大小,邏輯像素 |
 | `topmost` | `true` | 置頂:蓋過其他程式 |
 | `clickThrough` | `false` | 點穿:滑鼠穿過視窗,點到後面的程式。做不到的平台會記一筆 `warning` |
+| `opacity` | `1` | 整個視窗的不透明度,0(看不見)到 1(不透明);`0.8` 就看得到一點後面的程式。字、圖、標題列一起變淡。隨時可以改,不會重新載入頁面。桌面不會疊合視窗時(X11 沒開合成器)記一筆 `warning`,視窗照常顯示成不透明 |
 | `frame` | `true` | 系統的標題列與邊框。`false` 就只剩內容(自己在頁面裡畫關閉鈕) |
 | `taskbar` | `false` | 要不要出現在工作列 |
 
@@ -92,6 +94,8 @@ float.send(value)      // 傳一筆給外面:事件檔多一行 {"type":"message
 float.onData(fn)       // spec 的 data 每次改變時呼叫 fn(data);註冊時若已有資料會先叫一次
 float.data             // 目前的 data
 ```
+
+只讓背景透明、字不變淡(頁面自己用透明底色)沒有做:WebKitGTK 2.52 在透明視窗上重畫時不會先清掉上一張,幾秒內就疊成不透明、舊字也留著(2026-11-25 在 Mint 實測)。
 
 頁面是本機字串載入的,第一版不支援載外部網址當整頁(頁面裡自己 `fetch`、放 `<img src="https://…">` 不受限)。
 
@@ -126,6 +130,7 @@ float.data             // 目前的 data
 | webview | WebKitGTK(`libwebkit2gtk-4.1`) | WebView2(Windows 11 內建) |
 | 置頂 | ✅(`_NET_WM_STATE_ABOVE`) | ✅ |
 | 點穿 | ✅ | ✅ |
+| 半透明(`opacity`) | ✅ 要有合成器(Mint MATE 的 Marco 驗過) | 寫了,還沒在 Windows 上跑過 |
 | Wayland | 不保證置頂 | — |
 
 ## 建置

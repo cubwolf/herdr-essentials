@@ -66,6 +66,7 @@ function events(text) {
 export const float = {
   /** Opens a window, or replaces the one with this id.
    *  { id, html, data?, title?, x?, y?, width?, height?, topmost? (true), clickThrough? (false),
+   *    opacity? (1: opaque; 0.8 lets a little of what is behind show through),
    *    frame? (true: the system's title bar), taskbar? (false) }; x, y, width, height in logical pixels. */
   async open(spec) {
     const { id, ...rest } = spec ?? {};
@@ -74,10 +75,14 @@ export const float = {
 
   /** Changes some fields of an open window. False if it isn't open (closed by the person, say). */
   async update(id, patch) {
-    const text = await read(specPath(check(id)));
-    if (text == null) return false;
-    let now = {};
-    try { now = JSON.parse(text); } catch {}
+    let now = null;
+    // Someone may be writing the file this instant (the helper, another update): read again
+    // rather than take half a file for an empty spec and write the patch alone over the rest.
+    for (let tries = 0; now == null; tries++) {
+      const text = await read(specPath(check(id)));
+      if (text == null) return false;
+      try { now = JSON.parse(text); } catch (e) { if (tries >= 8) throw new Error(`k-float: ${id}'s spec can't be read (${e?.message ?? e}); not changed`); }
+    }
     const { id: _id, ...rest } = patch ?? {};
     await write(id, { ...now, ...rest });
     return true;

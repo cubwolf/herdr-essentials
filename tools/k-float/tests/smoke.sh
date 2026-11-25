@@ -38,6 +38,27 @@ has "data update reached the page without a reload" '"data":{"got":7}'
 xwininfo -root -tree | grep k-float-smoke | grep -q 360x && ok "resized to 360" || bad "resized to 360"
 [ -n "$SHOT" ] && ffmpeg -loglevel error -y -f x11grab -video_size 800x500 -i "$DISPLAY" -frames:v 1 "$SHOT"
 
+# 半透明:設到視窗屬性上;桌面沒有合成器(測試環境的 Xvfb)時畫面不會變,要記一筆 warning,有合成器就不該記。
+python3 - "$D/windows/demo.json" <<'EOF'
+import json, sys
+p = sys.argv[1]; s = json.load(open(p)); s["opacity"] = 0.6
+json.dump(s, open(p, "w"))
+EOF
+sleep 1.5
+W=$(xwininfo -root -tree | grep '"k-float-smoke"' | head -1 | awk '{print $1}')
+xprop -id "$W" _NET_WM_WINDOW_OPACITY 2>/dev/null | grep -q '= [0-9]' && ok "opacity set on the window" || bad "opacity set on the window"
+warned=no; grep '"type":"warning"' "$D/events/demo.jsonl" 2>/dev/null | grep -q opacity && warned=yes
+# 有沒有合成器:看 _NET_WM_CM_S0 這個 selection 有沒有人持有(要 python3-xlib;沒有就只印出來不判)。
+blend=$(python3 -c 'from Xlib import display
+d = display.Display(); print("yes" if d.get_selection_owner(d.intern_atom("_NET_WM_CM_S%d" % d.get_default_screen())) else "no")' 2>/dev/null)
+case "$blend/$warned" in
+  yes/no) ok "opacity: the desktop blends windows, no warning";;
+  no/yes) ok "opacity: the desktop doesn't blend windows, warned";;
+  /*) echo "     opacity warning: $warned (python3-xlib missing: can't tell whether this desktop blends windows)";;
+  *) bad "opacity warning (desktop blends windows: $blend, warned: $warned)";;
+esac
+[ "$(grep -c '"type":"ready"' "$D/events/demo.jsonl")" = 1 ] && ok "no reload on opacity update" || bad "no reload on opacity update"
+
 echo '{not json' > "$D/windows/broken.json"; sleep 1
 grep -q '"type":"error"' "$D/events/broken.jsonl" 2>/dev/null && ok "bad spec reports an error" || bad "bad spec reports an error"
 rm "$D/windows/broken.json"
