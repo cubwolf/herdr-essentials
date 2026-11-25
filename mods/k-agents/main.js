@@ -6,6 +6,18 @@ import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify, exec, machines, checking } from "herdr";
 import { modelOf, effortLevel, modelTip } from "./model.js";
 
+function uses(node, mod) {
+  return Boolean(node) && (node.content?.mod === mod || (node.children ?? []).some((c) => uses(c, mod)));
+}
+// The machines k-spaces hides in this window ("" is this computer): shared "k-spaces.hidden" =
+// { machines, spaces }. None while its eye shows them, or when k-spaces isn't in the layout
+// (shared data outlives the mod that wrote it).
+function hiddenMachines() {
+  const h = shared("k-spaces.hidden");
+  if (!Array.isArray(h?.machines) || shared("k-spaces.showHidden") === true || !uses(layout(), "k-spaces")) return new Set();
+  return new Set(h.machines);
+}
+
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -296,7 +308,10 @@ export default class Agents extends View {
     if (props()?.agentMenu) return this.agentMenu(t);
     const collapsed = narrow();
     const sort = sortOf();
-    let list = agents();
+    // k-agents: a machine hidden in k-spaces (this window) takes its agents out of the list too; the
+    // Spaces header's eye brings them back with it.
+    const away = hiddenMachines();
+    let list = agents().filter((a) => !away.has(a.address.includes("/") ? a.address.split("/")[0] : ""));
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     const all = terminals();
     const byAddress = new Map(all.map((x) => [x.address, x]));
