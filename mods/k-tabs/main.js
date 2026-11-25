@@ -1,9 +1,12 @@
-// k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it.
+// k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it,
+// and the bar lists the tabs you opened, whatever space or machine they are in (like VS Code's editor
+// tabs), not the shown space's tabs: see open.js.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
 import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, focused } from "herdr";
 import { attach } from "./attach.js";
 import { watchClipboard, pasteShot } from "./shot.js";
+import { opened, neighbour, moved, cycled, trimmed } from "./open.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -41,6 +44,46 @@ export default class Tabs extends View {
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
     this.swipe = { acc: 0, steps: 0, at: 0, last: 0 };
+    // k-tabs: the open tabs, left to right (ids from any space). null: never saved, so the first
+    // render starts it with the shown space's tabs.
+    try { this.open = JSON.parse(localStorage.getItem("open") ?? "null"); } catch { this.open = null; }
+    if (!Array.isArray(this.open)) this.open = null;
+    this.bar = [];
+  }
+
+  setOpen(list) {
+    if (list === this.open) return;
+    this.open = list;
+    localStorage.setItem("open", JSON.stringify(list));
+  }
+
+  // Shows a tab of any space.
+  go(entry) {
+    if (!entry) return;
+    if (!entry.space.active) run("space.select", { id: entry.space.id });
+    run("tab.select", { id: entry.tab.id });
+  }
+
+  // The next / previous tab on the bar, wrapping.
+  cycle(dir) {
+    const ids = this.bar.map(e => e.tab.id);
+    const to = cycled(ids, this.selected, dir);
+    if (to && to !== this.selected) this.go(this.bar.find(e => e.tab.id === to));
+  }
+
+  // × (or a middle click): off the bar and put away; it keeps running. The shown one hands over to
+  // its neighbour first. The only tab on the bar stays (something has to show).
+  close(id) {
+    const ids = this.bar.map(e => e.tab.id);
+    if (id === this.selected) {
+      const to = neighbour(ids, id);
+      if (!to) return;
+      // Until the neighbour shows, the closed one is still the shown tab: not to be opened again.
+      this.closing = { id, until: Date.now() + 1000 };
+      this.go(this.bar.find(e => e.tab.id === to));
+    }
+    this.setOpen(this.open.filter(x => x !== id));
+    run("tab.settle", { id });
   }
 
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
@@ -49,7 +92,7 @@ export default class Tabs extends View {
   // most one every 100 ms so each shows.
   wheel(e) {
     if (e.delta_lines) {
-      if (e.delta_lines.y) run(e.delta_lines.y > 0 ? "tab.prev" : "tab.next");
+      if (e.delta_lines.y) this.cycle(e.delta_lines.y > 0 ? -1 : 1);
       return;
     }
     const s = this.swipe, now = Date.now();
@@ -63,7 +106,7 @@ export default class Tabs extends View {
     s.acc -= Math.sign(s.acc) * need;
     s.steps++;
     s.last = now;
-    run(e.delta.y > 0 ? "tab.prev" : "tab.next");
+    this.cycle(e.delta.y > 0 ? -1 : 1);
   }
 
   // The side panel is remembered per space: switching shows that space's choice
@@ -97,10 +140,19 @@ export default class Tabs extends View {
   render() {
     const t = theme();
     const space = spaces().find(p => p.active);
-    // k-tabs: settled tabs (put away with ×) leave the bar; the shown one always stays.
-    const shown = (space?.tabs ?? []).filter(tab => !tab.settled || tab.active);
-    const active = shown.findIndex(tab => tab.active);
-    const selected = shown[active]?.id;
+    // k-tabs: the bar is the open tabs of every space, in the order they were opened or dragged to.
+    const all = new Map();
+    for (const sp of spaces()) for (const tab of sp.tabs ?? []) all.set(tab.id, { tab, space: sp });
+    const now = space?.tabs?.find(tab => tab.active)?.id;
+    if (this.closing && (this.closing.id !== now || Date.now() > this.closing.until)) this.closing = null;
+    if (!this.open) this.setOpen((space?.tabs ?? []).filter(tab => !tab.settled || tab.active).map(tab => tab.id));
+    if (now && this.closing?.id !== now) this.setOpen(trimmed(opened(this.open, now, this.selected), id => all.has(id)));
+    // Settled tabs (put away with ×, here or in the sidebar) leave the bar; the shown one always stays.
+    const shown = this.open.map(id => all.get(id)).filter(e => e && (!e.tab.settled || e.tab.id === now));
+    this.bar = shown;
+    const several = new Set(shown.map(e => e.space.id)).size > 1;
+    const active = shown.findIndex(e => e.tab.id === now);
+    const selected = shown[active]?.tab.id;
     if (selected !== this.selected || active !== this.selectedIndex) {
       this.selected = selected;
       this.selectedIndex = active;
@@ -109,27 +161,33 @@ export default class Tabs extends View {
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
-    const item = (c, i) => {
+    const item = (entry, i) => {
+      const c = entry.tab, on = i === active;
       const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
       const program = lead?.program;
       const name = label(c, lead);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
         .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
-        .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
+        .border(1).border_color(on ? t.border : t.chrome).bg(on ? t.raised : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
-        .on_mouse_up("left", () => {
+        .on_mouse_up("left", (_e, cx) => {
           const from = this.pressed; this.pressed = null;
-          if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex(x => x.id === c.id) + 1 });
-          else run("tab.select", { id: c.id });
+          // Dragging reorders the bar only, not the tabs in their spaces.
+          if (from !== null && from !== i && shown[from]) { this.setOpen(moved(this.open, shown[from].tab.id, c.id)); cx.notify(); }
+          else this.go(entry);
         })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
+        .on_mouse_down("middle", (_e, cx) => { cx.stop_propagation(); this.close(c.id); cx.notify(); })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: entry.space.id } } }); })
+        .tooltip(entry.space.machine ? `${entry.space.machine} · ${entry.space.name}` : entry.space.name)
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
+        // Tabs of several spaces on the bar: say whose each one is.
+        .when(several, el => el.child(div().max_w(90).truncate().text_size(11).text_color(t.dim).child(entry.space.name)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.settle", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
+        .when(on && shown.length > 1, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.close(c.id); cx.notify(); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
