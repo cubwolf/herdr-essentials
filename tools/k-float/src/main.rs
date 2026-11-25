@@ -115,6 +115,63 @@ impl Default for Spec {
     }
 }
 
+/// A screen's area in logical pixels: x, y, width, height.
+type Area = (f64, f64, f64, f64);
+
+/// The smallest width / height taken from a spec; below it the window would be lost.
+const MIN_SIDE: f64 = 20.0;
+
+/// Makes a spec's place one the person can see: a size too small to find (0×0) becomes the default,
+/// and a place on no screen (Windows parks a minimized window at -32000, an older helper wrote that
+/// into specs; a screen that was unplugged) moves to the middle of the first screen. True if changed.
+fn fit(spec: &mut Spec, screens: &[Area]) -> bool {
+    let d = Spec::default();
+    let mut changed = false;
+    if !(spec.width.is_finite() && spec.width >= MIN_SIDE) {
+        spec.width = d.width;
+        changed = true;
+    }
+    if !(spec.height.is_finite() && spec.height >= MIN_SIDE) {
+        spec.height = d.height;
+        changed = true;
+    }
+    if let (Some(x), Some(y)) = (spec.x, spec.y) {
+        let (w, h) = (spec.width, spec.height);
+        // At least a corner big enough to grab is on some screen.
+        let seen = |&(sx, sy, sw, sh): &Area| {
+            (x + w).min(sx + sw) - x.max(sx) >= w.min(40.0) && (y + h).min(sy + sh) - y.max(sy) >= h.min(MIN_SIDE)
+        };
+        if !(x.is_finite() && y.is_finite()) || (!screens.is_empty() && !screens.iter().any(seen)) {
+            match screens.first() {
+                Some(&(sx, sy, sw, sh)) => {
+                    spec.x = Some((sx + (sw - w).max(0.0) / 2.0).round());
+                    spec.y = Some((sy + (sh - h).max(0.0) / 2.0).round());
+                }
+                None => (spec.x, spec.y) = (None, None),
+            }
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The screens, the primary one first.
+fn screens(all: impl Iterator<Item = tao::monitor::MonitorHandle>, primary: Option<tao::monitor::MonitorHandle>) -> Vec<Area> {
+    let area = |m: &tao::monitor::MonitorHandle| {
+        let s = m.scale_factor();
+        let (p, z) = (m.position(), m.size());
+        (p.x as f64 / s, p.y as f64 / s, z.width as f64 / s, z.height as f64 / s)
+    };
+    let mut out: Vec<Area> = primary.iter().map(area).collect();
+    for m in all {
+        let a = area(&m);
+        if !out.contains(&a) {
+            out.push(a);
+        }
+    }
+    out
+}
+
 enum UserEvent {
     /// The windows folder as it is now: id -> spec text. Sent only when something changed.
     Specs(HashMap<String, String>),
@@ -187,8 +244,17 @@ fn lock(dir: &Path) -> Result<Option<File>, String> {
     }
 }
 
+/// install.sh writes <dir>/paused while it rebuilds the helper (Windows can't replace a running
+/// program): `start` doesn't start one meanwhile. Older than this, it was left behind by a failed run.
+const PAUSE_MAX: Duration = Duration::from_secs(15 * 60);
+
 fn start(dir: &Path) -> Result<(), String> {
     prepare(dir)?;
+    let paused = fs::metadata(dir.join("paused")).and_then(|m| m.modified()).ok();
+    if paused.is_some_and(|t| t.elapsed().map_or(true, |age| age < PAUSE_MAX)) {
+        println!("paused");
+        return Ok(());
+    }
     match lock(dir)? {
         None => {
             println!("running");
@@ -322,7 +388,7 @@ fn run(dir: &Path) -> Result<(), String> {
                 }
                 bad.retain(|id, _| texts.contains_key(id));
                 for (id, text) in texts {
-                    let spec = match serde_json::from_str::<Spec>(&text) {
+                    let mut spec = match serde_json::from_str::<Spec>(&text) {
                         Ok(spec) => spec,
                         Err(e) => {
                             // A half-written file parses on a later pass; report each bad text once.
@@ -335,10 +401,18 @@ fn run(dir: &Path) -> Result<(), String> {
                     };
                     bad.remove(&id);
                     if let Some(f) = floats.values_mut().find(|f| f.id == id) {
+                        let fixed = fit(&mut spec, &screens(f.window.available_monitors(), f.window.primary_monitor()));
                         apply(&dir, f, spec);
+                        if fixed {
+                            refitted(&dir, f);
+                        }
                     } else {
+                        let fixed = fit(&mut spec, &screens(target.available_monitors(), target.primary_monitor()));
                         match open(target, &mut context, &proxy, &id, &spec) {
                             Ok(mut f) => {
+                                if fixed {
+                                    refitted(&dir, &f);
+                                }
                                 show_opacity(&dir, &mut f, false);
                                 if spec.click_through {
                                     click_through(&dir, &f, true);
@@ -826,6 +900,16 @@ fn settle(dir: &Path, f: &mut Float) {
     }
 }
 
+/// The spec's place was one no one could see and `fit` changed it: write it back and say so, so a
+/// mod that keeps the place (in its own storage) takes the new one.
+fn refitted(dir: &Path, f: &Float) {
+    if let (Some(x), Some(y)) = (f.spec.x, f.spec.y) {
+        emit(dir, &f.id, json!({ "type": "moved", "x": x, "y": y }));
+    }
+    emit(dir, &f.id, json!({ "type": "resized", "width": f.spec.width, "height": f.spec.height }));
+    remember(dir, f);
+}
+
 /// Writes the window's place back into its spec file, keeping every other field as written.
 fn remember(dir: &Path, f: &Float) {
     let path = dir.join("windows").join(format!("{}.json", f.id));
@@ -867,5 +951,49 @@ fn emit(dir: &Path, id: &str, mut event: Value) {
     }
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = file.write_all(line.as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(x: f64, y: f64, w: f64, h: f64) -> Spec {
+        Spec { x: Some(x), y: Some(y), width: w, height: h, ..Spec::default() }
+    }
+    const SCREENS: [Area; 2] = [(0.0, 0.0, 1536.0, 864.0), (-1920.0, 0.0, 1920.0, 1080.0)];
+
+    #[test]
+    fn fit_keeps_a_place_on_a_screen() {
+        for s in [spec(94.0, 600.0, 322.0, 34.0), spec(-1800.0, 50.0, 300.0, 200.0), spec(1480.0, 840.0, 300.0, 200.0)] {
+            let mut t = s.clone();
+            assert!(!fit(&mut t, &SCREENS), "{s:?}");
+            assert_eq!(t, s);
+        }
+    }
+
+    #[test]
+    fn fit_brings_back_a_parked_window() {
+        // Seen on the laptop: what an older helper wrote while the window was minimized (125%),
+        // then Windows' smallest width for it.
+        for (w, h) in [(0.0, 0.0), (120.0, 0.0)] {
+            let mut t = spec(-25600.0, -25600.0, w, h);
+            assert!(fit(&mut t, &SCREENS));
+            assert!(t.width >= MIN_SIDE && t.height >= MIN_SIDE, "{t:?}");
+            let (x, y) = (t.x.unwrap(), t.y.unwrap());
+            assert!(x >= 0.0 && x + t.width <= 1536.0 && y >= 0.0 && y + t.height <= 864.0, "{t:?}");
+        }
+        let mut t = spec(-32000.0, -32000.0, 300.0, 200.0);
+        assert!(fit(&mut t, &SCREENS));
+        assert_eq!((t.x, t.y, t.width, t.height), (Some(618.0), Some(332.0), 300.0, 200.0));
+    }
+
+    #[test]
+    fn fit_without_screens_only_fixes_the_size() {
+        let mut t = spec(-25600.0, -25600.0, 0.0, 0.0);
+        assert!(fit(&mut t, &[]));
+        assert_eq!((t.x, t.y, t.width, t.height), (Some(-25600.0), Some(-25600.0), 320.0, 240.0));
+        let mut t = Spec::default();
+        assert!(!fit(&mut t, &SCREENS)); // no place: the system picks one
     }
 }

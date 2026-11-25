@@ -245,6 +245,34 @@ check("closed by the page's button", wait(lambda: any(e["type"] == "closed" and 
 check("spec removed", not os.path.exists(f"{D}/windows/note.json"))
 check("no warning", "warning" not in types())
 
+# 9. A spec with the place Windows gives a minimized window (written by an older helper, seen on the
+#    laptop): opened where it can be seen, and the spec says so.
+json.dump({"title": "wm-parked", "x": -25600, "y": -25600, "width": 120, "height": 0, "html": "<body style=background:#cde>parked"},
+          open(f"{D}/windows/parked.json", "w"))
+wait(lambda: find("wm-parked") is not None)
+parked = find("wm-parked")
+check("parked spec opens a window", parked is not None)
+if parked:
+    time.sleep(0.8)
+    px, py = place(parked)
+    pg = parked.get_geometry()
+    check(f"on the screen ({px},{py} {pg.width}x{pg.height})", 0 <= px and px + pg.width <= 1280 and 0 <= py and py + pg.height <= 800 and pg.height >= 20)
+    p = json.load(open(f"{D}/windows/parked.json"))
+    check(f"spec rewritten ({p.get('x')},{p.get('y')} {p.get('width')}x{p.get('height')})", p["x"] >= 0 and p["y"] >= 0 and p["height"] >= 20)
+    pe = [json.loads(l) for l in open(f"{D}/events/parked.jsonl") if l.strip()]
+    check("moved event with the new place", any(e["type"] == "moved" and e["x"] >= 0 for e in pe))
+os.remove(f"{D}/windows/parked.json")
+
+# 10. While install.sh rebuilds the helper (paused), start doesn't start one.
+subprocess.run([BIN, "stop", D], env=env)
+wait(lambda: find("wm-parked") is None and find("wm-note") is None)
+time.sleep(1)
+open(f"{D}/paused", "w").close()
+out = subprocess.run([BIN, "start", D], env=env, capture_output=True, text=True).stdout.strip()
+check(f"paused: not started ({out})", out == "paused")
+os.remove(f"{D}/paused")
+out = subprocess.run([BIN, "start", D], env=env, capture_output=True, text=True).stdout.strip()
+check(f"unpaused: started ({out})", out == "started")
 subprocess.run([BIN, "stop", D], env=env)
 if fail:
     print("--- events"); print("\n".join(json.dumps(e) for e in events()))

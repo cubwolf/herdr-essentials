@@ -33,7 +33,10 @@ command -v node >/dev/null || echo "tool: 找不到 node(k-chat 的主持程式�
 # link 模式整個資料夾 link 過去;複製模式只放執行檔(target/ 很大)。沒有 cargo 就跳過,k-float / k-note 會說找不到輔助程式。
 EXE=k-float; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) EXE=k-float.exe;; esac
 dst=$H/tools/k-float
-[ -x "$dst/target/release/$EXE" ] && "$dst/target/release/$EXE" stop "$H/data/k-float" 2>/dev/null && sleep 1   # 正在跑的那支先收掉(Windows 換不掉執行中的檔)
+# 正在跑的那支先收掉(Windows 換不掉執行中的檔)。paused:建置期間 mod 呼叫的 start 不會再把它叫起來;建完拿掉、再叫起來。
+FD=$H/data/k-float
+if [ -x "$dst/target/release/$EXE" ]; then mkdir -p "$FD" && touch "$FD/paused"; "$dst/target/release/$EXE" stop "$FD" 2>/dev/null && sleep 1; fi
+trap 'rm -f "$FD/paused"' EXIT
 if command -v cargo >/dev/null; then
   if (cd "$HERE/tools/k-float" && cargo build --release --quiet); then
     if [ -L "$dst" ] || [ -d "$dst" ]; then rm -rf "$dst"; fi
@@ -41,6 +44,11 @@ if command -v cargo >/dev/null; then
     else mkdir -p "$dst/target/release"; cp "$HERE/tools/k-float/target/release/$EXE" "$dst/target/release/"; echo "tool: k-float (copy)"; fi
   else echo "tool: k-float 建置失敗(Linux 要 libwebkit2gtk-4.1-dev、libgtk-3-dev),k-float / k-note 先不能用" >&2; fi
 else echo "tool: 找不到 cargo,k-float 的輔助程式沒建(k-float / k-note 先不能用);裝 Rust 後重跑" >&2; fi
+rm -f "$FD/paused"
+# 收掉前開著的視窗(windows/*.json 還在):叫回來。沒有就不叫,它也會自己結束。
+if [ -x "$dst/target/release/$EXE" ] && ls "$FD"/windows/*.json >/dev/null 2>&1; then
+  echo "tool: k-float 重新開視窗:$(env -u TMUX -u CLAUDECODE "$dst/target/release/$EXE" start "$FD" 2>&1)"
+fi
 # 舊版的 k-profiles、k-mods 已併進 k-settings(Settings 裡的 Profiles、Mods 頁):拿掉留在 App home 的舊 link / 複本。
 for old in k-profiles k-mods; do
   if [ -L "$H/mods/$old" ] || [ -d "$H/mods/$old" ]; then rm -rf "$H/mods/$old"; echo "mod: $old 已併進 k-settings,移除舊的"; fi
