@@ -1,9 +1,11 @@
 // k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it,
 // and the bar lists the tabs you opened, whatever space or machine they are in (like VS Code's editor
-// tabs), not the shown space's tabs: see open.js.
+// tabs), not the shown space's tabs: see open.js. Attach, Paste shot, Files and Changes are on the
+// status bar (k-status), which sends "attach" / "paste-shot" here. With shared "k-tabs.multiline"
+// (Settings → Look) the tabs wrap onto more lines and the bar grows to fit.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, layout, settings, focused } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand } from "herdr";
 import { attach } from "./attach.js";
 import { watchClipboard, pasteShot } from "./shot.js";
 import { opened, neighbour, moved, cycled, trimmed } from "./open.js";
@@ -33,13 +35,26 @@ function label(tab, lead) {
   return (tab.name === prog || !tab.named) && telling ? live : base;
 }
 
+// The bar's height with one line of tabs (the layout's own).
+const LINE = 42;
+
 export default class Tabs extends View {
   init(_props, cx) {
     this.pressed = null;
     // k-tabs: "Paste shot" shows only while the clipboard holds an image.
     this.clipImage = false;
-    cx.spawn(async (cx) => watchClipboard((on) => { this.clipImage = on; cx.notify(); },
+    // k-status draws the button: it reads shared "k-tabs.clip".
+    if (shared("k-tabs.clip") === true) setShared("k-tabs.clip", false);
+    cx.spawn(async (cx) => watchClipboard((on) => { this.clipImage = on; if ((shared("k-tabs.clip") === true) !== on) setShared("k-tabs.clip", on); cx.notify(); },
       (ms) => new Promise(done => cx.timer.after(ms, () => done()))));
+    // The status bar's Attach / Paste shot buttons (or a key: "k-tabs.attach").
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const command = await nextCommand();
+        if (command === "attach") cx.spawn(async (cx) => attach(cx));
+        else if (command === "paste-shot") cx.spawn(async (cx) => pasteShot(cx));
+      }
+    });
     this.scroll = ScrollHandle.new();
     try { this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}"); } catch { this.panels = {}; }
     if (!this.panels || typeof this.panels !== "object" || Array.isArray(this.panels)) this.panels = {};
@@ -168,7 +183,7 @@ export default class Tabs extends View {
       const name = label(c, lead);
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         // A rename or status dot on this or an earlier tab can push the active one out.
-        .when(i <= active, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
+        .when(i <= active && !multi, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .border(1).border_color(on ? t.border : t.chrome).bg(on ? t.raised : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
@@ -197,37 +212,26 @@ export default class Tabs extends View {
     const panel = find(root, "panel"), body = find(root, "panel-body");
     const enabled = shared("workspace.panels") ?? ["files", "changes"];
     this.syncPanel(space, panel, body, enabled);
-    const panelButton = (id, label, icon) => {
-      const on = panel && !panel.hidden && body?.active === id;
-      return h_flex().id(`panel-${id}`).h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-        .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
-        .hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
-        .on_click(() => {
-          if (on) run("layout.hide", { id: "panel" });
-          else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
-        }).child(svg(icon).size(14)).child(label);
+    // k-tabs: several lines when asked for; the block is as tall as the lines need (one line: 42).
+    const multi = shared("k-tabs.multiline") === true;
+    const block = find(root, "tabs")?.size?.px;
+    const fit = (height) => {
+      const want = multi ? Math.max(LINE, Math.round(height) + 12) : LINE;
+      if (block != null && Math.abs(block - want) >= 1) run("layout.resize", { id: "tabs", px: want });
     };
+    if (!multi) fit(0);
+    const tabs = multi
+      // Wrapping: no scrolling, the block grows instead (fit).
+      ? h_flex().id("tab-wrap").flex_1().min_w(0).flex_wrap().items_center().gap(3)
+        .on_size_change((size) => fit(size.height))
+      : h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
+        .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } });
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+      .when(multi, el => el.items_start().py(6))
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => this.wheel(e))
-      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().track_scroll(this.scroll)
-        .on_size_change((_size, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
-        .children(shown.map(item)))
+      .child(tabs.children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
-      // k-tabs: + Attach files (system dialog → paths pasted into the focused terminal, no Enter).
-      .when(Boolean(focused()?.terminal), el => el.child(h_flex().id("attach").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-        .text_size(12).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
-        .tooltip("Attach files: paste their paths into the terminal")
-        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => attach(cx)); })
-        .child(svg("mods/k-tabs/paperclip.svg").size(14)).child("Attach")))
-      // k-tabs: the clipboard holds an image -> save it as a PNG and paste that like Attach.
-      .when(this.clipImage && Boolean(focused()?.terminal), el => el.child(h_flex().id("paste-shot").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
-        .text_size(12).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
-        .tooltip("Paste the clipboard image into the terminal")
-        .on_click((_e, cx) => { cx.stop_propagation(); cx.spawn(async (cx) => pasteShot(cx)); })
-        .child(svg("mods/k-tabs/image.svg").size(14)).child("Paste shot")))
-      .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
-      .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/k-tabs/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/k-tabs/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))
         .child(button("close-window", w.platform === "windows" ? svg("mods/k-tabs/win-close.svg").size(16) : svg("mods/pane/close.svg").size(13), () => run("window.close"))));

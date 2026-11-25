@@ -78,6 +78,11 @@ if ! grep -q '"k-pane"' "$K"; then
   sed -i.bak -E 's/"mod": *"pane"/"mod": "k-pane"/g' "$K" && rm -f "$K.bak"
   grep -q '"k-pane"' "$K" && echo "layout: k-main 的 pane 標頭換成 k-pane" || echo "layout: pane 標頭不是內建的 pane,沒換成 k-pane" >&2
 fi
+# k-status(下方狀態列,多了原本在 tab 列右邊的 Attach / Paste shot / Files / Changes):換掉內建 workspace-status。已換成別的就不動。
+if ! grep -q '"k-status"' "$K"; then
+  sed -i.bak -E 's/"mod": *"workspace-status"/"mod": "k-status"/g' "$K" && rm -f "$K.bak"
+  grep -q '"k-status"' "$K" && echo "layout: k-main 的狀態列換成 k-status(Attach / Files / Changes 在下方)" || echo "layout: 狀態列不是內建的 workspace-status,沒換成 k-status(Attach / Files / Changes 按鈕不會出現)" >&2
+fi
 # k-pick 的快捷鍵 ctrl-f12(對話框開著時只能用快捷鍵開,點標題列的準心會先關掉對話框)。已綁別的就不動。
 KJ=$H/keys.json
 if [ -e "$KJ" ]; then
