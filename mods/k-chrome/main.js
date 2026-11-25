@@ -1,8 +1,11 @@
 // k-chrome (herdr-essentials): the shipped workspace-chrome; the footer's Settings opens k-settings
 // (the app's settings plus Profiles and Mods pages), and the title bar has a k-pick button.
+// It also keeps the back / forward history of sessions looked at, and the one last typed into
+// (nav.js): keys.json binds "k-chrome.back", "k-chrome.forward" and "k-chrome.last-input".
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { theme, run, props, window, shared, setShared, updates, layout } from "herdr";
+import { theme, run, props, window, shared, setShared, updates, layout, focused, spaces, panes, terminals, nextCommand, notify } from "herdr";
+import { Nav, entryOf } from "./nav.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -25,7 +28,40 @@ function toggleSidebar() {
   run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 76 : 44 });
 }
 
+// Still there: its tab is in a space, and its pane (or, for a terminal block, its terminal) exists.
+const spaceOf = (entry) => spaces().find((s) => s.tabs.some((tab) => tab.id === entry.tab));
+function alive(entry) {
+  if (!spaceOf(entry)) return false;
+  if (entry.pane) return panes().some((p) => p.pane === entry.pane);
+  return !entry.terminal || terminals().some((x) => x.address === entry.terminal);
+}
+
+function show(entry) {
+  const space = spaceOf(entry);
+  if (!space) return;
+  if (!space.active) run("space.select", { id: space.id });
+  run("tab.select", { id: entry.tab });
+  if (entry.pane) run("pane.focus", { pane: entry.pane });
+  else if (entry.terminal) run("pane.focus", { terminal: entry.terminal });
+}
+
 export default class WorkspaceChrome extends View {
+  init(p, cx) {
+    // One copy keeps the history: the title bar's (the footer is a second copy of this mod).
+    if (p?.footer) return;
+    this.nav = new Nav();
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const command = await nextCommand();
+        const nav = this.nav;
+        const target = command === "back" ? nav.step(-1, alive) : command === "forward" ? nav.step(1, alive)
+          : command === "last-input" ? nav.toInput(alive) : undefined;
+        if (target) show(target);
+        else if (command === "last-input" && !nav.lastInput) notify({ title: "No session typed into yet", timeout: 2000 });
+        cx.notify();
+      }
+    });
+  }
   button(id, label, action) {
     const t = theme();
     return div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.muted).hover(s => s.bg(t.hover).text_color(t.foreground))
@@ -33,6 +69,11 @@ export default class WorkspaceChrome extends View {
   }
   render() {
     const t = theme();
+    if (this.nav) {
+      const here = entryOf(focused());
+      this.nav.input(terminals(), here);
+      this.nav.visit(here);
+    }
     const collapsed = narrow();
     if (props()?.footer) {
       const row = (id, icon, label, dim, action) => h_flex().id(id).h(28).px(8).gap(9).items_center().rounded(8)
