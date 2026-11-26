@@ -13,6 +13,11 @@ export function opened(open, shown, previous) {
 }
 
 /** 從列上關掉 id 之後該顯示誰:右邊那個,沒有就左邊;列上只剩它 → null。`bar` 是列上看得到的 id。 */
+/** Close Other Tabs: the bar's tabs to put away, all but `keep`. Nothing when `keep` isn't on the bar. */
+export function others(bar, keep) {
+  return bar.includes(keep) ? bar.filter((id) => id !== keep) : [];
+}
+
 export function neighbour(bar, id) {
   const at = bar.indexOf(id);
   if (at < 0) return null;
