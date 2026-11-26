@@ -186,6 +186,7 @@ export default class Tabs extends View {
         .when(i <= active && !multi, el => el.on_size_change((_size, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
         .border(1).border_color(on ? t.border : t.chrome).bg(on ? t.raised : t.chrome).text_color(on ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))
+        .on_hover((over, cx) => { if (over) this.over = c.id; else if (this.over === c.id) this.over = null; cx.notify(); })
         .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pressed = i; if (e.click_count === 2) run("tab.rename", { id: c.id }); })
         .on_mouse_up("left", (_e, cx) => {
           const from = this.pressed; this.pressed = null;
@@ -202,7 +203,11 @@ export default class Tabs extends View {
         .when(several, el => el.child(div().max_w(90).truncate().text_size(11).text_color(t.dim).child(entry.space.name)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
-        .when(on && shown.length > 1, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.close(c.id); cx.notify(); }).child(svg("mods/pane/close.svg").size(12))));
+        // × on the shown tab and on the one under the pointer; the others keep its room, so tabs don't shift.
+        .when(shown.length > 1, el => el.child(div().id(`close-${c.id}`).size(16).flex_none().flex().items_center().justify_center().rounded(4).text_color(t.dim)
+          .when(!(on || this.over === c.id), x => x.opacity(0))
+          .hover(s => s.bg(t.border).text_color(t.foreground)).tooltip("Put away (it keeps running)")
+          .on_mouse_down("left", stop).on_mouse_up("left", stop).on_click((_e, cx) => { cx.stop_propagation(); this.close(c.id); cx.notify(); }).child(svg("mods/pane/close.svg").size(12))));
     };
     const root = layout(), sidebar = find(root, "sidebar"), w = window();
     // Old saved rails and a dragged-narrow sidebar can be smaller than the window buttons.
