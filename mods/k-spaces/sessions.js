@@ -48,7 +48,8 @@ export const PS = (dir) => `$ErrorActionPreference='SilentlyContinue'; [Console]
 // Plain CommonJS, no backticks and no double quotes outside strings that need them less than this
 // comment suggests: it travels as one argument, on Windows too.
 // Codex: the newest files first (at most 400 looked at); the first line (session_meta) has the folder
-//   (cwd), the id, and who started it (codex exec: left out); the last user_message is the prompt.
+//   (cwd), the id, and who started it (codex exec: left out); the prompt is what the person last said
+//   (lastSaid: the laptop's real sessions, Codex Desktop's, have no user_message events).
 // agy: rows with a title (a -p run never gets one) whose workspace is the folder.
 export const NODE = String.raw`
 const fs = require('fs'), path = require('path'), os = require('os');
@@ -57,6 +58,21 @@ const norm = (p) => { let s = String(p || '').replace(/\\/g, '/').replace(/\/+$/
 const here = norm(folder);
 const str = (text, key) => { const m = new RegExp('"' + key + '":"((?:[^"\\\\]|\\\\.)*)').exec(text); if (!m) return ''; try { return JSON.parse('"' + m[1].replace(/\\$/, '') + '"'); } catch (e) { return m[1]; } };
 const part = (file, tail, len) => { const fd = fs.openSync(file, 'r'); try { const size = fs.fstatSync(fd).size, n = Math.min(len, size), b = Buffer.alloc(n); fs.readSync(fd, b, 0, n, tail ? size - n : 0); return b.toString('utf8'); } finally { fs.closeSync(fd); } };
+// What the person last said in a Codex session: its user_message event, or (Codex Desktop writes none)
+// the last user message among the response items that isn't something Codex put in itself (<environment_context>…,
+// AGENTS.md and the like start with a tag or a heading).
+const lastSaid = (text) => {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    let s = '';
+    if (l.includes('"type":"user_message"')) s = str(l, 'message');
+    else if (l.includes('"type":"response_item"') && l.includes('"role":"user"')) s = str(l, 'text');
+    s = s.trim();
+    if (s && !/^[<#]/.test(s)) return s;
+  }
+  return '';
+};
 if (kind === 'codex') {
   const root = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
   const down = (dir) => { try { return fs.readdirSync(dir).sort().reverse(); } catch (e) { return []; } };
@@ -71,8 +87,7 @@ if (kind === 'codex') {
       if (/"originator":"codex_exec"|"source":"exec"/.test(head)) continue;
       const id = (/"id":"([0-9a-fA-F-]{36})"/.exec(head) || /([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})\.jsonl$/.exec(name) || [])[1];
       if (!id) continue;
-      const said = part(file, true, 300000).split('\n').filter((l) => l.includes('"type":"user_message"')).pop();
-      out.push({ id: id, at: fs.statSync(file).mtimeMs, title: '', prompt: said ? str(said, 'message') : '' });
+      out.push({ id: id, at: fs.statSync(file).mtimeMs, title: '', prompt: lastSaid(part(file, true, 300000)) || lastSaid(part(file, false, 300000)) });
     } catch (e) {}
   }
   out.sort((a, b) => b.at - a.at);

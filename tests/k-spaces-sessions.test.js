@@ -112,6 +112,12 @@ test("Codex: this folder's sessions from every day's folder, newest first; codex
       { id: B, at: 3000000, title: "", prompt: '新的 "引號"' },
       { id: A, at: 1000000, title: "", prompt: "舊的最後一句" },
     ]);
+    // Codex Desktop: no user_message events, what was said is among the response items, after what Codex put in itself
+    const item = (role, text) => ({ type: "response_item", payload: { type: "message", role, content: [{ type: role === "user" ? "input_text" : "output_text", text }] } });
+    const E = "55555555-5555-4555-8555-555555555555";
+    put(["2026", "11", "27"], E, "/w/desk", { originator: "Codex Desktop", source: "vscode" },
+      [item("user", "# AGENTS.md instructions\n…"), item("user", "<environment_context>\n  <cwd>/w/desk</cwd>"), item("user", "幫我寫一個通用CLAUDE.md"), item("assistant", "好"), item("user", "<turn_aborted>")], 5000);
+    assert.deepEqual(await list(runIn(home), { folder: "/w/desk", kind: "codex" }), [{ id: E, at: 5000000, title: "", prompt: "幫我寫一個通用CLAUDE.md" }]);
     assert.deepEqual(await list(runIn(home), { folder: "/w/none", kind: "codex" }), []);
     // CODEX_HOME moves the whole thing
     assert.deepEqual(await list(runIn(home, { CODEX_HOME: path.join(home, "elsewhere") }), { folder: "/w/repo", kind: "codex" }), []);
