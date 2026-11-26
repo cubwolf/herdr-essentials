@@ -5,7 +5,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { theme, spaces, knownAgents, run, closeOverlay, props, shared, setShared, exec, appHome } from "herdr";
 import { system } from "./inspect.js";
-import { isClaude, list as sessions, resumeArgs, ago } from "./sessions.js";
+import { kindOf, list as sessions, resumeArgs, ago } from "./sessions.js";
 
 // The last agents each machine reported (the shipped new-menu's cache), shown while checking again.
 const KNOWN = "new-menu.agents";
@@ -49,20 +49,22 @@ export default class AgentMenu extends View {
   // `session`: go on with that one (Claude Code's --resume) instead of a new one.
   start(agent, session = null) {
     const flags = this.yolo ? yoloFlags(agent) : null;
-    run("tab.new", { name: agent.name, space: this.spaceId, argv: [...agent.run, ...(session ? resumeArgs(session) : []), ...(flags ?? [])] });
+    // Its own flags first: Codex's "resume <id>" is a subcommand, and flags after it are that subcommand's.
+    run("tab.new", { name: agent.name, space: this.spaceId, argv: [...agent.run, ...(flags ?? []), ...(session ? resumeArgs(session, kindOf(agent)) : [])] });
     this.close();
   }
 
-  // An agent that keeps its sessions (Claude Code): when it had some in this space's folder, list
+  // An agent whose sessions can be read (Claude Code, Codex, agy; sessions.js): when it had some in this space's folder, list
   // them with New below; none (or the check fails) → a new one right away, as before.
   pick(agent, cx) {
     const space = spaces().find((s) => s.id === this.spaceId);
-    if (!isClaude(agent) || !space?.folder) { this.start(agent); return; }
+    const kind = kindOf(agent);
+    if (!kind || !space?.folder) { this.start(agent); return; }
     if (this.checking) return;
     this.checking = agent.key; cx.notify();
     cx.spawn(async (cx) => {
       let found = [];
-      try { found = await sessions(exec, { folder: space.folder, machine: this.machine, posix: (await system(this.machine)).posix }); } catch {}
+      try { found = await sessions(exec, { folder: space.folder, machine: this.machine, kind, posix: kind === "claude" ? (await system(this.machine)).posix : true }); } catch {}
       this.checking = null;
       if (!found.length) { this.start(agent); return; }
       this.picking = { agent, sessions: found };
