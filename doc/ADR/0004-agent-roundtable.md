@@ -145,3 +145,10 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 - 邀第二個成員 → `direct`、`act` 都關掉,回到主席制(紀錄寫一行),輪數上限至少再給 6 輪。
 - 紀錄的抬頭寫「k-chat 一般對話 · 對象:…」;系統訊息(🔓、⚠️)在紀錄裡仍用主席的標題(porthole 與 mod 用同一條規則切訊息),mod 在一般對話裡把它顯示成 `k-chat`。
 - 實測:Linux 測試環境,mod 表單開一場、真的 `claude -p` 回答、開「可動手」後真的建了檔。沒測:Codex / Gemini、別台機器的 agent、Windows。
+
+### 入口改到 Space 的「+」(2026-11-26,Owner 要求)
+
+- 一般對話從 New discussion 表單拿掉,改成側欄 Space 列「+」選單的 **Chat**(`mods/k-spaces/agents.js`):對象就是那個 Space 的 agent(Claude,那個 Space 的資料夾),不用選人、不用填主題。
+- 按下去:`runner.mjs new --direct`(沒有開場,狀態先是 `waiting`)→ `start --no-layout` → 在那個 Space 開一個 k-chat 的 tab「💬 Chat 月-日 時:分」,直接打字。紀錄存在那個 Space 的 `doc/chat/chat-<日期時間>.md`。
+- 別台機器的 Space 不能用(紀錄要寫在本機的資料夾),那一列會灰掉。
+- 想用 Codex / Gemini 當對象:指令列 `new --direct` 的成員帶 `agent`。

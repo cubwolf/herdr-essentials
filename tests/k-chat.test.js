@@ -86,6 +86,13 @@ test("一般對話:不經主席,Owner 說一句、agent 答一句;可動手由 O
     assert.match(t.md(), /不再是一對一/);
     assert.ok(t.calls().some((c) => c.args.includes("--json-schema")), "現在有主席了");
   } finally { await t.stop(); }
+  // 沒有開場的一般對話(Space 的「+」→ Chat):先等 Owner,不會叫 agent 回答空話
+  const quiet = setup([], ["--direct"], (d) => [{ space: "alpha", cwd: d.alpha }]);
+  try {
+    const made = quiet.cli("new", "--direct", "--repo", quiet.dirs.main, "--topic", "空的", "--members", JSON.stringify([{ space: "alpha", cwd: quiet.dirs.alpha }]));
+    assert.equal(made.status, 0, made.stderr);
+    assert.equal(JSON.parse(fs.readFileSync(made.stdout.trim(), "utf8")).status, "waiting");
+  } finally { await quiet.stop(); }
   assert.throws(() => L.newState({ repo: "/r", topic: "t", direct: true, list: [{ space: "a", cwd: "/a" }, { space: "b", cwd: "/b" }] }), /剛好一個/);
 });
 

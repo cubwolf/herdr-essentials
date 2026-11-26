@@ -3,7 +3,7 @@
 // YOLO switch that starts the agent with its skip-every-permission flag. The switch is remembered.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { theme, spaces, knownAgents, run, closeOverlay, props, shared, setShared } from "herdr";
+import { theme, spaces, knownAgents, run, closeOverlay, props, shared, setShared, exec, appHome } from "herdr";
 
 // The last agents each machine reported (the shipped new-menu's cache), shown while checking again.
 const KNOWN = "new-menu.agents";
@@ -50,10 +50,33 @@ export default class AgentMenu extends View {
     this.close();
   }
 
+  // Chat: a plain conversation with this space's agent (k-chat, no chair), kept in the space's
+  // doc/chat/. Made and hosted by k-chat's runner; its tab is the k-chat mod on that state file.
+  chat(cx) {
+    const space = spaces().find((s) => s.id === this.spaceId);
+    if (!space?.folder || this.busy) return;
+    this.busy = true; this.error = null; cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const runner = `${appHome().replace(/[\\/]+$/, "")}/tools/k-chat/runner.mjs`;
+        const d = new Date(), two = (n) => String(n).padStart(2, "0");
+        const stamp = `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+        const title = `Chat ${stamp}`, topic = `chat-${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+        const member = { name: space.name, space: space.name, cwd: space.folder, agent: "claude" };
+        const made = await exec("node", [runner, "new", "--direct", "--repo", space.folder, "--topic", topic, "--title", title, "--space", space.name, "--members", JSON.stringify([member])], { timeout: 20000 });
+        if (made.code !== 0) throw new Error((made.stderr || made.stdout || "runner failed").trim().split("\n").pop());
+        const state = made.stdout.trim();
+        await exec("node", [runner, "start", state, "--no-layout"], { timeout: 20000 });
+        run("tab.new", { space: space.id, name: `💬 ${title}`.slice(0, 40), mod: "k-chat", props: { state, space: space.id } });
+        this.close();
+      } catch (e) { this.error = String(e?.message ?? e).slice(0, 120); this.busy = false; cx.notify(); }
+    });
+  }
+
   row(t, id, icon, name, action, hint = "", enabled = true) {
     return h_flex().id(id).h(31).px(9).gap(10).rounded(7).items_center().flex_none()
       .text_color(enabled ? t.foreground : t.dim).when(enabled, (el) => el.cursor_pointer().hover((s) => s.bg(t.selected)))
-      .on_click(() => { if (enabled) action(); })
+      .on_click((_e, cx) => { if (enabled) action(cx); })
       .child(icon).child(div().flex_1().min_w(0).truncate().child(name)).child(div().flex_none().text_size(11).text_color(t.dim).child(hint));
   }
 
@@ -65,7 +88,7 @@ export default class AgentMenu extends View {
     const toggle = () => { this.yolo = !this.yolo; setShared(YOLO_KEY, this.yolo); };
     // A popup sizes to its content: give the list room for its rows (as the shipped new-menu does).
     const rows = Math.max(1, choices.length + (this.failed || this.agents.length === 0 ? 1 : 0));
-    return v_flex().id("k-agent-menu").w_full().h(Math.min(400, 108 + rows * 31)).min_h(0).bg(t.popover).p(5).text_size(12.8).text_color(t.foreground)
+    return v_flex().id("k-agent-menu").w_full().h(Math.min(400, 139 + rows * 31)).min_h(0).bg(t.popover).p(5).text_size(12.8).text_color(t.foreground)
       .track_focus(this.handle)
       .on_key_down((e, cx) => {
         if (e.modifiers.control || e.modifiers.platform || e.modifiers.alt) return;
@@ -75,6 +98,9 @@ export default class AgentMenu extends View {
       })
       .child(div().px(9).pt(4).pb(4).text_size(11).text_color(t.dim).truncate().child(`New tab in ${space?.name ?? "this space"}${this.machine ? ` · ${this.machine}` : ""}`))
       .child(this.row(t, "k-agent-terminal", svg("icons/shell.svg").size(14), "Terminal", () => { run("tab.new", { space: this.spaceId }); this.close(); }))
+      // Its record is written on this machine, into the space's folder: not for a space on another machine.
+      .child(this.row(t, "k-agent-chat", svg("mods/k-spaces/bot.svg").size(14).text_color(t.foreground), this.busy ? "Starting chat…" : "Chat", (cx) => this.chat(cx),
+        this.error ?? (this.machine ? "this machine only" : "saved in doc/chat"), !this.machine && !this.busy && Boolean(space?.folder)))
       .child(h_flex().px(9).pt(8).pb(4).items_center()
         .child(div().flex_1().text_size(11).text_color(t.dim).child("Start an agent"))
         // YOLO: the agent asks nothing (its skip-permissions flag); Y toggles it too.

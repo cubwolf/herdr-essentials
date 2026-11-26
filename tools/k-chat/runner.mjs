@@ -319,6 +319,7 @@ function main() {
       const repo = path.resolve(o.repo), f = L.files(repo, o.topic);
       if (fs.existsSync(f.json)) throw new Error(`已經有這個主題:${f.json}`);
       const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
+      if (s.direct && !o.say) s.status = "waiting";   // nothing said yet: the agent has nothing to answer
       fs.mkdirSync(f.inbox, { recursive: true });
       fs.writeFileSync(f.md, L.header(s));
       L.save(f.json, s);
