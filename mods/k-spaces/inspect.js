@@ -13,7 +13,7 @@ import { exec, knownAgents, panes, spaces, theme, closeOverlay, props, window } 
 // ---- reading files on a machine ----------------------------------------------------------------
 
 const systems = new Map(); // machine → Promise<{ posix, mac }>
-function system(machine) {
+export function system(machine) {
   const k = machine ?? "";
   if (!systems.has(k)) systems.set(k, (async () => {
     if (!machine) { const p = window()?.platform; return { posix: p !== "windows", mac: p === "macos" }; }
