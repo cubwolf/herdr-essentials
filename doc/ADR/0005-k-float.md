@@ -122,3 +122,13 @@ await float.close("note");
 
 1. 筆記要不要多張?第一版先做一張(`id: "note"`)。
 2. 跨機:back 的 mod 用 `exec(..., { on: "laptop" })` 叫出 laptop 的視窗,第一版不做(spec 檔在對面,`writeTextFile` 沒有 `on`)。
+
+## 給 agent 指位置:頁面自己的選取器(2026-11-26,Owner 回報 k-pick 選不到浮動視窗)
+
+- k-pick 是蓋在 Herdr 視窗裡的一層,浮動視窗是另一個系統視窗,蓋不到、版面資料裡也沒有。所以選取做在輔助程式注入每一頁的那段 script 裡(跟 `window.float` 同一處),mod 的頁面不用改。
+- 進入選取的兩個途徑:
+  - `<資料夾>/pick` 這個旗標檔存在而且是新的(4 秒內改過):k-pick 開著時每秒重寫一次;輔助程式每 200ms 看一次,有變化就對每個視窗下 `window.float.__pick(true/false)`。旗標會過期,是因為 Esc 是 App 自己關掉 k-pick 的,mod 來不及清(實測第一版就卡在選取模式)。
+  - 在浮動視窗裡按 `Ctrl+F12`(只有那一頁)。
+- 選取中:游標下的元素加外框和標籤;頁面原本的拖曳、改大小、點擊都不作用。點一下 → 頁面把定位器複製到剪貼簿(`execCommand("copy")`,不行再試 `navigator.clipboard`),並告訴輔助程式;輔助程式寫事件 `{type:"pick", locator}`、把定位器寫到 `<資料夾>/picked`、刪掉旗標。k-pick 看到 `picked` 就跳通知、關掉自己。
+- 定位器:`float=<id> | selector=<CSS,最多 6 層,遇到有 id 的祖先就停> | tag=… | text="前 80 字" | at=(x,y) in element (dx,dy) of W×H | window=W×H`。沒有截圖(webview 沒有現成的截圖介面)。
+- 實測:Linux 測試環境(Xvfb,k-note):外框、點擊、剪貼簿、k-pick 自己關、Esc 後旗標清掉。Windows(WebView2)沒實測,尤其是 `execCommand("copy")` 在沒有鍵盤焦點的視窗裡行不行。

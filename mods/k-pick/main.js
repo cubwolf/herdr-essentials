@@ -5,12 +5,17 @@
 //   layout=k-main | block=sidebar-footer | mod=k-chrome | file=mods/k-chrome/main.js | path=root > sidebar > sidebar-footer | at=(52,1430) in block (44,12) of 268×69 | shot=…png
 // with a window shot (outline and click mark in it) for the agent to look at. Esc leaves.
 // Open it: herdr-app do mod.open --name k-pick.
+// k-float's desktop windows aren't Herdr's window: this layer can't see into them. While it is open
+// it leaves a flag file (<App home>/data/k-float/pick, kept fresh) and the k-float helper has each window's page
+// pick for itself: outline under the pointer, a click copies `float=<id> | selector=… | text=… | at=…`
+// (no shot). The helper then drops the flag and writes data/k-float/picked, which closes this layer.
 // Dialogs and popups aren't in layout(): `herdr-app status` names the open ones, their mod.json
 // gives the size (a dialog sits centered; k-settings reports its own height in shared "k-pick.sizes"),
 // and a pick inside one reports that mod. While a dialog is open a click beside it closes it before
 // this layer sees the click, so there the pick is Space / Enter at the pointer.
 import { View, div } from "gpui-kit";
 import { h_flex } from "gpui-base";
+import * as fs from "fs/promises";
 import { theme, layout, shared, props, closeOverlay, exec, appHome, readTextFile, notify, window, checking, openOverlay } from "herdr";
 
 const sep = () => (window()?.platform === "windows" ? "\\" : "/");
@@ -73,6 +78,19 @@ function mouseAt() {
   try { const p = globalThis.window?.mouse_position?.(); return p && Number.isFinite(p.x) ? { x: p.x, y: p.y } : null; } catch { return null; }
 }
 
+// k-float's flag and result files (see the top). The flag is written again every second while this
+// layer is up, and the helper stops believing it after a few seconds: however this layer goes away
+// (Esc is the app's, not ours), the windows leave picking. Nothing happens where k-float was never used.
+const floatDir = () => `${appHome().replace(/[\\/]+$/, "")}${sep()}data${sep()}k-float`;
+const floatFile = (name) => `${floatDir()}${sep()}${name}`;
+async function floats(on) {
+  try {
+    if (!(await fs.exists(floatDir()))) return;
+    if (on) await fs.writeFile(floatFile("pick"), String(Date.now()));
+    else for (const name of ["pick", "picked"]) { try { await fs.unlink(floatFile(name)); } catch {} }
+  } catch {}
+}
+
 const what = (r) => (r.mod ? `mod=${r.mod}` : r.terminal ? `terminal=${r.terminal}` : r.type === "block" ? "terminal panes (Herdr)" : `type=${r.type}`);
 
 export default class Pick extends View {
@@ -83,6 +101,21 @@ export default class Pick extends View {
     this.overlays = []; // open dialogs / popups under this layer, bottom first: { name, spec, size }
     this.handle = cx.focus_handle();
     cx.timer.after(50, () => this.handle.focus());
+    if (!checking()) {
+      cx.spawn(async () => { try { await fs.unlink(floatFile("picked")); } catch {} await floats(true); });
+      cx.timer.every(1000, (cx) => { if (!this.picked && !this.leaving) cx.spawn(async () => { await floats(true); }); });
+      // A pick made in a k-float window: its helper wrote what the page copied.
+      cx.timer.every(400, (cx) => {
+        if (this.picked || this.leaving) return;
+        cx.spawn(async () => {
+          let text = "";
+          try { if (await fs.exists(floatFile("picked"))) text = (await fs.readFile(floatFile("picked"), "utf8")) ?? ""; } catch {}
+          if (!text.trim() || this.leaving) return;
+          notify({ title: "k-pick: copied", body: text.trim(), level: "success", timeout: 6000 });
+          this.leave();
+        });
+      });
+    }
     if (!checking()) cx.spawn(async (cx) => {
       await this.loadOverlays();
       // A window overlay draws under dialogs and a click on it closes them: over a dialog, open
@@ -176,8 +209,15 @@ export default class Pick extends View {
       } catch {}
       cx.write_to_clipboard(text);
       notify({ title: "k-pick: copied", body: text, level: "success", timeout: 6000 });
-      closeOverlay(props()?.overlay);
+      this.leave();
     }));
+  }
+
+  // Out of picking, here and in k-float's windows.
+  leave() {
+    if (this.leaving) return;
+    this.leaving = true;
+    floats(false).finally(() => closeOverlay(props()?.overlay));
   }
 
   render(_cx) {
@@ -196,7 +236,7 @@ export default class Pick extends View {
       .on_mouse_move((e, cx) => { if (!this.picked) { this.pointer = e.position; cx.notify(); } })
       .on_mouse_down("left", (e, cx) => { cx.stop_propagation(); this.pick(e.position.x, e.position.y, cx); })
       .on_key_down((e, cx) => {
-        if (e.key === "escape") { cx.stop_propagation(); closeOverlay(props()?.overlay); return; }
+        if (e.key === "escape") { cx.stop_propagation(); this.leave(); return; }
         // Space / Enter: pick at the pointer (the way to pick in a dialog, which a click would close).
         if (e.key === "space" || e.key === "enter") {
           const p = mouseAt() ?? this.pointer;
