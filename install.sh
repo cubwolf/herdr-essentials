@@ -117,6 +117,9 @@ navkey() { # <鍵> <指令> [可以換掉的預設]
 navkey alt-left k-chrome.back pane.go:left
 navkey alt-right k-chrome.forward pane.go:right
 navkey ctrl-q k-chrome.last-input
+# 快速前往(照 Eclipse 的 Ctrl+Shift+T「Open Type」):開內建的 picker —— 直接打字過濾 tab / Space / agent,↑↓ 選,Enter 過去。
+# ctrl-shift-t 還是內建預設的 tab.new 就換掉(開新 tab 用 tab 列或 Space 列的「+」);綁了別的不動。ctrl-shift-k 原本就是它,留著。
+navkey ctrl-shift-t mod.open:picker tab.new
 # Claude Code 的 statusLine 回報器:把模型、強度寫成 terminal 標籤,k-agents 的 Agents 列換 icon / 底色。
 # 只在 ~/.claude/settings.json 還沒有 statusLine 時加;已有別的就不動,只提醒。要 node 改 JSON。
 SL="$HERE/tools/statusline/herdr-statusline.sh"
