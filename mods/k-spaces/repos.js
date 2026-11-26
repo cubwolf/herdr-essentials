@@ -5,6 +5,7 @@
 // are found from the first open; it's always shown above the list, and Choose changes it (the
 // system folder dialog here; for a remote machine, whose disks that dialog can't see, a folder
 // browser in this menu that lists that machine's folders, which can also open a space there).
+// "Open a folder…" opens a space on any folder, picked the same two ways (no repo, no typing a path).
 // "New empty space" is the plain space.new it replaced.
 //
 // Everything runs on the chosen machine (exec `on`), so its gh login and folders are the ones used.
@@ -25,7 +26,8 @@ function slugOf(url) {
 }
 const sameDir = (a, b) => String(a ?? "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase() === String(b ?? "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
 // The system's folder dialog on this computer (as k-tabs' Attach does files): a path, or "" when cancelled.
-async function pickFolder(platform, start) {
+async function pickFolder(platform, start, title = "Folder you keep repos in") {
+  const q = title.replace(/['"]/g, "");
   const long = { timeout: 600000 };
   const out = (r) => (r.code === 0 ? (r.stdout ?? "").trim() : "");
   if (platform === "windows") {
@@ -33,15 +35,15 @@ async function pickFolder(platform, start) {
       "Add-Type -AssemblyName System.Windows.Forms",
       "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
       "$o = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }",
-      "$d = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = 'Folder you keep repos in'; ShowNewFolderButton = $true }",
+      `$d = New-Object System.Windows.Forms.FolderBrowserDialog -Property @{ Description = '${q}'; ShowNewFolderButton = $true }`,
       `$d.SelectedPath = '${String(start).replace(/'/g, "''")}'`,
       "if ($d.ShowDialog($o) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }",
     ].join("; ");
     return out(await exec("powershell.exe", ["-NoProfile", "-STA", "-Command", ps], long));
   }
   if (platform === "macos")
-    return out(await exec("osascript", ["-e", 'POSIX path of (choose folder with prompt "Folder you keep repos in")'], long)).replace(/\/$/, "");
-  try { return out(await exec("zenity", ["--file-selection", "--directory", "--title=Folder you keep repos in", ...(start ? [`--filename=${start}/`] : [])], long)); }
+    return out(await exec("osascript", ["-e", `POSIX path of (choose folder with prompt "${q}")`], long)).replace(/\/$/, "");
+  try { return out(await exec("zenity", ["--file-selection", "--directory", `--title=${q}`, ...(start ? [`--filename=${start}/`] : [])], long)); }
   catch { return out(await exec("kdialog", ["--getexistingdirectory", start || "."], long)); }
 }
 
@@ -170,6 +172,28 @@ export default class RepoMenu extends View {
       try {
         const dir = await pickFolder(window()?.platform, this.base() ?? "");
         if (dir) { this.baseInput.set_value(dir); this.setBase(cx); }
+      } catch (e) { this.error = `Couldn't open the folder dialog: ${String(e?.message ?? e)}`; }
+      this.choosing = false;
+      cx.notify();
+    });
+  }
+
+  // Open a folder…: a space on any folder, picked in the system's folder dialog (this computer) or in
+  // the folder browser here (another machine: "Open a space here").
+  open_folder(cx) {
+    if (this.machine) {
+      if (this.browse) { this.browse = null; cx.notify(); return; }
+      cx.spawn(async (cx) => { const sys = await this.system(); this.goTo(this.base() || sys.home, cx); });
+      return;
+    }
+    if (this.choosing) return;
+    this.choosing = true;
+    cx.notify();
+    cx.spawn(async (cx) => {
+      try {
+        const sys = await this.system();
+        const dir = await pickFolder(window()?.platform, this.base() || sys.home || "", "Folder to open as a space");
+        if (dir) { this.open(dir.replace(/[\\/]+$/, "") || dir); return; }
       } catch (e) { this.error = `Couldn't open the folder dialog: ${String(e?.message ?? e)}`; }
       this.choosing = false;
       cx.notify();
@@ -392,6 +416,12 @@ export default class RepoMenu extends View {
           .when(Boolean(this.busy), (el) => el.opacity(0.6))
           .child(this.busy ? "Cloning…" : "Clone"))))
       .child(div().h(1).flex_none().bg(t.border))
+      // Any folder as a space, picked with the mouse.
+      .child(h_flex().id("repo-open-folder").h(30).px(8).gap(8).items_center().rounded(6).flex_none().text_color(t.muted)
+        .when(!this.choosing, (el) => el.cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click((_e, cx) => this.open_folder(cx)))
+        .child(svg("mods/workspace-chrome/folder.svg").size(12))
+        .child(div().flex_1().min_w(0).truncate().child(this.choosing ? "Choosing a folder…" : "Open a folder…"))
+        .child(div().flex_none().text_size(10.5).text_color(t.dim).child(this.machine ? "browse its folders" : "pick it in a dialog")))
       .child(h_flex().id("repo-empty").h(30).px(8).gap(8).items_center().rounded(6).cursor_pointer().flex_none().text_color(t.muted)
         .hover((s) => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => { run("space.new", { machine: this.mk }); this.close(); })

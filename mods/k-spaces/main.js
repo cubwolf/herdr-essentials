@@ -698,7 +698,8 @@ export default class Spaces extends View {
             // k-spaces: with this computer hidden here, a new space goes to the first machine still shown.
             const hm = hidden().machines;
             const m = hm.includes("") && this.machines.find(k => k.state === "connected" && !hm.includes(k.name));
-            if (m) repoMenu(m.name); else run("space.new");
+            // The same menu as a machine's "+": a repo, any folder (picked in a dialog), or an empty space.
+            repoMenu(m ? m.name : null);
           }).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
