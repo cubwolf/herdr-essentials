@@ -79,6 +79,7 @@ const PAGE_API: &str = r#"
   const SLOP = 4;
   let style = null, press = null, dragged = false;
   addEventListener("mousemove", (e) => {
+    if (picking) return;
     if (press) {
       if (!(e.buttons & 1)) press = null;
       else if (Math.hypot(e.screenX - press.x, e.screenY - press.y) >= SLOP) { press = null; dragged = true; ctl("drag"); }
@@ -89,7 +90,7 @@ const PAGE_API: &str = r#"
   }, true);
   addEventListener("mousedown", (e) => {
     press = null; dragged = false;
-    if (e.button !== 0) return;
+    if (picking || e.button !== 0) return;
     const d = edge(e);
     if (d) { e.preventDefault(); e.stopPropagation(); ctl("resize:" + d); return; }
     const t = e.target instanceof Element ? e.target : null;
@@ -107,11 +108,96 @@ const PAGE_API: &str = r#"
     if (!dragged) return;
     dragged = false; e.preventDefault(); e.stopImmediatePropagation();
   }, true);
+
+  // Pointing at an element for an agent (k-pick, which can't see into this window: it isn't Herdr's).
+  // On while <dir>/pick exists (k-pick makes it) or after Ctrl+F12 here: the element under the pointer
+  // is outlined, a click copies a locator for it, Esc leaves.
+  let picking = false, box = null, tag = null, target = null;
+  const esc = (s) => (window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/[^\w-]/g, "\\$&"));
+  const step = (el) => {
+    if (el.id) return '#' + esc(el.id);
+    let s = el.localName;
+    for (const c of [...el.classList].slice(0, 2)) s += '.' + esc(c);
+    const same = el.parentElement ? [...el.parentElement.children].filter((x) => x.localName === el.localName) : [];
+    return same.length > 1 ? s + ':nth-of-type(' + (same.indexOf(el) + 1) + ')' : s;
+  };
+  const selector = (el) => {
+    const parts = [];
+    for (let at = el; at && at.nodeType === 1 && at !== document.documentElement && parts.length < 6; at = at.parentElement) {
+      parts.unshift(step(at));
+      if (at.id) break;
+    }
+    return parts.join(' > ');
+  };
+  const ours = (el) => el === box || el === tag;
+  const under = (e) => { const el = document.elementFromPoint(e.clientX, e.clientY); return el && !ours(el) ? el : null; };
+  const outline = (el) => {
+    target = el;
+    if (!box) {
+      box = document.createElement("div"); tag = document.createElement("div");
+      box.style.cssText = "position:fixed;z-index:2147483646;pointer-events:none;border:2px solid #2f6feb;background:#2f6feb22;box-sizing:border-box;margin:0";
+      tag.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;background:#2f6feb;color:#fff;font:11px/1.5 system-ui,sans-serif;padding:1px 6px;border-radius:4px;max-width:92vw;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin:0";
+      document.documentElement.append(box, tag);
+    }
+    if (!el) { box.style.display = "none"; tag.style.display = ""; tag.style.left = "4px"; tag.style.top = "4px"; tag.textContent = "k-pick · click an element · Esc"; return; }
+    const r = el.getBoundingClientRect();
+    box.style.display = ""; tag.style.display = "";
+    box.style.left = r.left + "px"; box.style.top = r.top + "px"; box.style.width = r.width + "px"; box.style.height = r.height + "px";
+    tag.textContent = step(el) + "  " + Math.round(r.width) + "×" + Math.round(r.height);
+    tag.style.left = Math.max(0, Math.min(r.left, innerWidth - 60)) + "px";
+    tag.style.top = (r.top >= 20 ? r.top - 20 : Math.min(innerHeight - 20, r.bottom + 2)) + "px";
+  };
+  const copy = (text) => {
+    const done = () => { try {
+      const a = document.createElement("textarea"); a.value = text; a.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.documentElement.appendChild(a); a.select(); const ok = document.execCommand("copy"); a.remove(); return ok;
+    } catch (e) { return false; } };
+    if (!done() && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+  };
+  const pickMode = (on) => {
+    on = !!on;
+    if (on === picking) return;
+    picking = on;
+    if (on) outline(null);
+    else { if (box) { box.remove(); tag.remove(); } box = tag = target = null; }
+  };
+  window.float.__pick = pickMode;
+  const choose = (e) => {
+    const el = under(e) || target;
+    if (!el) return;
+    const r = el.getBoundingClientRect(), n = Math.round;
+    const text = (el.innerText || el.value || el.getAttribute("aria-label") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const loc = [
+      "float=" + (window.__floatId || "?"),
+      "selector=" + selector(el),
+      "tag=" + el.localName,
+      text && "text=" + JSON.stringify(text),
+      "at=(" + n(e.clientX) + "," + n(e.clientY) + ") in element (" + n(e.clientX - r.left) + "," + n(e.clientY - r.top) + ") of " + n(r.width) + "×" + n(r.height),
+      "window=" + innerWidth + "×" + innerHeight,
+    ].filter(Boolean).join("  |  ");
+    copy(loc);
+    ctl("picked:" + loc);
+    pickMode(false);
+  };
+  const eat = (e) => { e.preventDefault(); e.stopImmediatePropagation(); };
+  addEventListener("keydown", (e) => {
+    if (e.key === "F12" && e.ctrlKey && !e.shiftKey && !e.altKey) { eat(e); if (picking) ctl("pick-off"); pickMode(!picking); return; }
+    if (picking && e.key === "Escape") { eat(e); ctl("pick-off"); pickMode(false); }
+  }, true);
+  addEventListener("mousemove", (e) => { if (picking) outline(under(e)); }, true);
+  for (const type of ["mousedown", "mouseup", "click", "dblclick", "contextmenu", "pointerdown", "pointerup"]) {
+    addEventListener(type, (e) => {
+      if (!picking) return;
+      eat(e);
+      if (type === "click" && e.button === 0) choose(e);
+    }, true);
+  }
 })();
 "#;
 
-fn page_api(frame: bool, collapsed: bool) -> String {
-    format!("window.__floatFrameless = {};\nwindow.__floatCollapsed = {collapsed};\n{PAGE_API}", !frame)
+fn page_api(id: &str, frame: bool, collapsed: bool) -> String {
+    // The id is a file name the helper checked (valid_id): letters, digits, - and _.
+    format!("window.__floatId = \"{id}\";\nwindow.__floatFrameless = {};\nwindow.__floatCollapsed = {collapsed};\n{PAGE_API}", !frame)
 }
 
 #[derive(Deserialize, Clone, PartialEq, Debug)]
@@ -483,6 +569,7 @@ fn run(dir: &Path) -> Result<(), String> {
     let mut floats: HashMap<WindowId, Float> = HashMap::new();
     let mut bad: HashMap<String, String> = HashMap::new();
     let mut empty_since = Instant::now();
+    let mut picking = false;
 
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -558,6 +645,15 @@ fn run(dir: &Path) -> Result<(), String> {
                     user_closed(&dir, &mut floats, w);
                     return;
                 }
+                // The page's picker: done (with what it copied) or left. Either way picking ends everywhere.
+                if cmd == "pick-off" || cmd.starts_with("picked:") {
+                    if let Some(locator) = cmd.strip_prefix("picked:") {
+                        emit(&dir, &id, json!({ "type": "pick", "locator": locator }));
+                        let _ = fs::write(dir.join("picked"), locator);
+                    }
+                    let _ = fs::remove_file(dir.join("pick"));
+                    return;
+                }
                 let Some(f) = floats.get_mut(&w) else { return };
                 match cmd.as_str() {
                     "drag" => {
@@ -596,11 +692,22 @@ fn run(dir: &Path) -> Result<(), String> {
                 if let Some(f) = floats.values().find(|f| f.id == id) {
                     push_data(f);
                     push_collapsed(f);
+                    if picking {
+                        push_pick(f, true);
+                    }
                     emit(&dir, &id, json!({ "type": "ready" }));
                 }
             }
             Event::UserEvent(UserEvent::Stop) => *control_flow = ControlFlow::Exit,
             Event::UserEvent(UserEvent::Tick) => {
+                // <dir>/pick: k-pick is open in Herdr (or a page asked): every window's page picks too.
+                let wanted = pick_wanted(&dir.join("pick"), SystemTime::now());
+                if wanted != picking {
+                    picking = wanted;
+                    for f in floats.values() {
+                        push_pick(f, picking);
+                    }
+                }
                 for f in floats.values_mut() {
                     settle(&dir, f);
                     sync_minimized(&dir, f);
@@ -758,7 +865,7 @@ fn open(
     let webview_builder = WebViewBuilder::new_with_web_context(context)
         // A window that appears must not take the keyboard from what the person is typing in.
         .with_focused(false)
-        .with_initialization_script(&page_api(spec.frame, spec.collapsed))
+        .with_initialization_script(&page_api(id, spec.frame, spec.collapsed))
         .with_html(&spec.html)
         .with_ipc_handler(move |request| {
             let body = request.body();
@@ -1145,6 +1252,23 @@ fn covered_by_active(_f: &Float) -> bool {
     false
 }
 
+/// The flag k-pick keeps fresh while it is up. One left behind (k-pick gone without a goodbye) is
+/// thrown away: the windows must not stay in picking.
+const PICK_FRESH: Duration = Duration::from_secs(4);
+fn pick_wanted(flag: &Path, now: SystemTime) -> bool {
+    let Ok(meta) = fs::metadata(flag) else { return false };
+    let age = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).unwrap_or(Duration::ZERO);
+    if age > PICK_FRESH {
+        let _ = fs::remove_file(flag);
+        return false;
+    }
+    true
+}
+
+fn push_pick(f: &Float, on: bool) {
+    let _ = f.webview.evaluate_script(&format!("window.float && window.float.__pick && window.float.__pick({on})"));
+}
+
 fn push_data(f: &Float) {
     let _ = f.webview.evaluate_script(&format!("window.float && window.float.__data({})", f.spec.data));
 }
@@ -1437,10 +1561,23 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_pick_flag_is_dropped() {
+        let dir = std::env::temp_dir().join(format!("k-float-pick-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let flag = dir.join("pick");
+        assert!(!pick_wanted(&flag, SystemTime::now()));
+        fs::write(&flag, "1").unwrap();
+        assert!(pick_wanted(&flag, SystemTime::now()));
+        assert!(!pick_wanted(&flag, SystemTime::now() + Duration::from_secs(10)));
+        assert!(!flag.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn page_api_starts_in_the_specs_state() {
-        let s = page_api(false, true);
-        assert!(s.starts_with("window.__floatFrameless = true;\nwindow.__floatCollapsed = true;\n"));
-        for name in ["collapse(size)", "expand()", "onCollapsed(fn)", "data-float-drag-click", "data-float-collapsed"] {
+        let s = page_api("note", false, true);
+        assert!(s.starts_with("window.__floatId = \"note\";\nwindow.__floatFrameless = true;\nwindow.__floatCollapsed = true;\n"));
+        for name in ["collapse(size)", "expand()", "onCollapsed(fn)", "data-float-drag-click", "data-float-collapsed", "window.float.__pick", "picked:"] {
             assert!(s.contains(name), "{name}");
         }
     }
