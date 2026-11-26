@@ -1,7 +1,7 @@
 // node --test tests/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { opened, neighbour, moved, cycled, trimmed } from "../mods/k-tabs/open.js";
+import { opened, neighbour, moved, cycled, trimmed, others } from "../mods/k-tabs/open.js";
 
 test("opened: a tab shown for the first time goes right of the one shown before", () => {
   const open = ["a", "b", "c"];
@@ -40,4 +40,10 @@ test("trimmed: only a long list drops tabs that are gone", () => {
   assert.equal(trimmed(open, (id) => id !== "gone"), open);
   assert.deepEqual(trimmed(open, (id) => id !== "gone", 2), ["a", "b"]);
   assert.deepEqual(trimmed(["a", "b", "c"], () => true, 2), ["b", "c"]);
+});
+
+test("others: all but the one kept; nothing when it isn't on the bar", () => {
+  assert.deepEqual(others(["a", "b", "c"], "b"), ["a", "c"]);
+  assert.deepEqual(others(["a"], "a"), []);
+  assert.deepEqual(others(["a", "b"], "x"), []);
 });

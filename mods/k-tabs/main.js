@@ -1,14 +1,16 @@
 // k-tabs (herdr-essentials): the shipped tab bar, but × puts a tab away (tab.settle) instead of ending it,
 // and the bar lists the tabs you opened, whatever space or machine they are in (like VS Code's editor
-// tabs), not the shown space's tabs: see open.js. Attach, Paste shot, Files and Changes are on the
+// tabs), not the shown space's tabs: see open.js. A tab's right-click menu is menu.js (Close, Close Other
+// Tabs, Close All Tabs, as IntelliJ). Attach, Paste shot, Files and Changes are on the
 // status bar (k-status), which sends "attach" / "paste-shot" here. With shared "k-tabs.multiline"
 // (Settings → Look) the tabs wrap onto more lines and the bar grows to fit.
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex, ScrollHandle } from "gpui-base";
-import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand } from "herdr";
+import { spaces, panes, run, openOverlay, theme, window, shared, setShared, layout, settings, nextCommand, props } from "herdr";
 import { attach } from "./attach.js";
 import { watchClipboard, pasteShot } from "./shot.js";
-import { opened, neighbour, moved, cycled, trimmed } from "./open.js";
+import { opened, neighbour, moved, cycled, trimmed, others } from "./open.js";
+import TabMenu, { DO } from "./menu.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -40,6 +42,10 @@ const LINE = 42;
 
 export default class Tabs extends View {
   init(_props, cx) {
+    // k-tabs: a tab's right-click menu is this mod again, as a popup (menu.js).
+    if (props()?.kMenu) { this.menuView = cx.new(TabMenu, {}); return; }
+    // What that menu last asked for (shared, so it outlives a restart): not to be done again.
+    this.did = shared(DO)?.at ?? null;
     this.pressed = null;
     // k-tabs: "Paste shot" shows only while the clipboard holds an image.
     this.clipImage = false;
@@ -101,6 +107,25 @@ export default class Tabs extends View {
     run("tab.settle", { id });
   }
 
+  // Close Other Tabs: only that one stays on the bar (and shows); the rest are put away, still running.
+  closeOthers(id) {
+    const keep = this.bar.find(e => e.tab.id === id);
+    const rest = others(this.bar.map(e => e.tab.id), id);
+    if (!keep || !rest.length) return;
+    if (this.selected !== id) {
+      // Until it shows, the old shown tab is still the shown one: not to be opened again.
+      if (this.selected) this.closing = { id: this.selected, until: Date.now() + 1000 };
+      this.go(keep);
+    }
+    this.setOpen(this.open.filter(x => !rest.includes(x)));
+    for (const x of rest) run("tab.settle", { id: x });
+  }
+
+  // Close All Tabs: something has to show, so the shown tab stays and the rest are put away.
+  closeAll() {
+    if (this.selected) this.closeOthers(this.selected);
+  }
+
   // One tab per wheel notch. A touchpad or smooth-scrolling mouse sends many
   // small events per gesture: a short swipe or one smoothed notch (about
   // 25 px) switches one tab, a longer swipe keeps going a tab per 60 px, at
@@ -153,6 +178,7 @@ export default class Tabs extends View {
   }
 
   render() {
+    if (this.menuView) return div().size_full().child(this.menuView);
     const t = theme();
     const space = spaces().find(p => p.active);
     // k-tabs: the bar is the open tabs of every space, in the order they were opened or dragged to.
@@ -172,6 +198,14 @@ export default class Tabs extends View {
       this.selected = selected;
       this.selectedIndex = active;
       if (active >= 0) this.scroll.scroll_to_item(active);
+    }
+    // What the right-click menu asked for (menu.js), once.
+    const ask = shared(DO);
+    if (ask?.at && ask.at !== this.did) {
+      this.did = ask.at;
+      if (ask.what === "close") this.close(ask.id);
+      else if (ask.what === "others") this.closeOthers(ask.id);
+      else if (ask.what === "all") this.closeAll();
     }
     const stop = (_e, cx) => cx.stop_propagation();
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
@@ -195,7 +229,7 @@ export default class Tabs extends View {
           else this.go(entry);
         })
         .on_mouse_down("middle", (_e, cx) => { cx.stop_propagation(); this.close(c.id); cx.notify(); })
-        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: entry.space.id } } }); })
+        .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "k-tabs", kind: "popup", width: 250, height: 260, props: { kMenu: true, target: { id: c.id, space: entry.space.id, count: shown.length } } }); })
         .tooltip(entry.space.machine ? `${entry.space.machine} · ${entry.space.name}` : entry.space.name)
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
