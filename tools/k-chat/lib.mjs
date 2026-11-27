@@ -33,12 +33,16 @@ const two = (n) => String(n).padStart(2, "0");
 export const clock = (d = new Date()) => `${two(d.getHours())}:${two(d.getMinutes())}`;
 export const day = (d = new Date()) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 
-// A topic as a file name: no separators, no leading dot.
-export function slug(topic) {
-  const s = String(topic ?? "").trim().replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^[-.]+|-+$/g, "");
-  if (!s) throw new Error("主題不能是空的");
-  return s.slice(0, 80);
+// A topic as a file name, letters, digits, - and _ only (porthole's #chat opens no other name; the
+// topic itself is the record's H1). A topic with none of them: chat-<date>-<time>.
+export function slug(topic, d = new Date()) {
+  if (!String(topic ?? "").trim()) throw new Error("主題不能是空的");
+  const s = String(topic).replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-{2,}/g, "-").replace(/^[-_]+|[-_]+$/g, "");
+  return (/[A-Za-z0-9]/.test(s) ? s : `chat-${stamp(d)}`).slice(0, 80);
 }
+export const stamp = (d = new Date()) => `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+// A heading's time: ISO in the record (as porthole writes it), HH:MM on screen. Older records have HH:MM.
+export const shown = (at) => { const t = Date.parse(at); return Number.isNaN(t) ? String(at ?? "") : clock(new Date(t)); };
 
 // Where one discussion's files are: the record, its state, the Owner's inbox.
 export function files(repo, topic) {
@@ -79,15 +83,15 @@ export function newState({ repo, topic, title, space, list, chairAgent, chairMod
   };
 }
 
-// The record. Headings are the chat plugin's (porthole's #chat reads "## 🧑 Human" and
-// "## 🤖 Assistant"); who spoke comes after the role.
+// The record, in porthole's #chat format: "# <title>", then "## 🧑 Human · <ISO>" / "## 🤖 Assistant · <ISO>"
+// turns; who spoke comes between the role and the time. Either side may append to the same file.
 export const header = (s, d = new Date()) => s.direct
-  ? `# Chat: ${s.title}\n\n> k-chat 一般對話 · 開始於 ${day(d)} ${clock(d)} · 對象:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、")}\n`
-  : `# Chat: ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
+  ? `# ${s.title}\n\n> k-chat 一般對話 · 開始於 ${day(d)} ${clock(d)} · 對象:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、")}\n`
+  : `# ${s.title}\n\n> k-chat 討論群 · 開始於 ${day(d)} ${clock(d)} · 主席 ${sourceLabel(s.chair)} · 成員:${s.members.map((m) => `${m.name}@${m.space}(${sourceLabel(m)})`).join("、") || "(還沒有)"}\n`;
 export const entry = (who, text, d = new Date()) => {
   const head = who === "owner" ? "🧑 Human" : who === "chair" ? "🤖 Assistant · 🪑 主席" : `🤖 Assistant · ${who.name}@${who.space}`;
   // What someone said can't start a new message: its own # and ## headings go down to ###.
-  return `\n## ${head} · ${clock(d)}\n\n${String(text).trim().replace(/^#{1,2}(?=\s)/gm, "###")}\n`;
+  return `\n## ${head} · ${d.toISOString()}\n\n${String(text).trim().replace(/^#{1,2}(?=\s)/gm, "###")}\n`;
 };
 export const actLine = (name, on) => (on ? `🔓 Owner 允許 ${name} 動手(改檔、跑指令),到關掉為止。` : `🔒 Owner 收回了 ${name} 動手的權限:只能讀。`);
 // A direct conversation's next turn: whoever the Owner is talking to answers what he just said.
@@ -101,7 +105,7 @@ export function messages(record) {
   const heads = [...String(record ?? "").matchAll(re)];
   heads.forEach((h, i) => {
     const rest = h[2].split("·").map((x) => x.trim()).filter(Boolean);
-    const time = rest.length ? rest[rest.length - 1] : "";
+    const time = shown(rest.length ? rest[rest.length - 1] : "");
     const label = rest.slice(0, -1).join(" · ");
     const role = h[1].startsWith("🧑") ? "owner" : label.includes("主席") ? "chair" : "member";
     const end = i + 1 < heads.length ? heads[i + 1].index : record.length;
@@ -109,6 +113,14 @@ export function messages(record) {
   });
   return out;
 }
+
+// A record's title: its H1 (before the first turn), else the fallback. Whether it has turns at all
+// (porthole lists only those; a note written into doc/chat has none).
+export function titleOf(record, fallback) {
+  const t = String(record ?? ""), first = t.search(/^## /m), head = first === -1 ? t : t.slice(0, first);
+  return /^# (.+)$/m.exec(head)?.[1]?.trim() || fallback;
+}
+export const hasTurns = (record) => /^## (🧑 (?:Human|You)|🤖 (?:Assistant|Claude))/m.test(String(record ?? ""));
 
 // What an Owner message asks of the runner, besides being said.
 //   /stop: end the turn that is running and wait.  /end: have the chair conclude now.

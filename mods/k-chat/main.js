@@ -20,6 +20,10 @@ const sourceId = (x) => x?.agent ?? "claude";
 const sourceLabel = (x) => `${SOURCES.find(([id]) => id === sourceId(x))?.[1] ?? x?.agent}${x?.model ? ` ${x.model}` : ""}`;
 const base = (p) => String(p ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
 
+// A heading's time: ISO in the record (porthole's format), HH:MM here. Older records have HH:MM.
+const two = (n) => String(n).padStart(2, "0");
+const shown = (at) => { const d = new Date(Date.parse(at)); return Number.isNaN(d.getTime()) ? String(at ?? "") : `${two(d.getHours())}:${two(d.getMinutes())}`; };
+
 // The record as messages (the same rule as tools/k-chat/lib.mjs and porthole's #chat).
 function messages(record) {
   const out = [], text = String(record ?? "");
@@ -28,7 +32,7 @@ function messages(record) {
     const rest = h[2].split("·").map((x) => x.trim()).filter(Boolean);
     const label = rest.slice(0, -1).join(" · ");
     const role = h[1].startsWith("🧑") ? "owner" : label.includes("主席") ? "chair" : "member";
-    out.push({ role, who: role === "owner" ? "Owner" : role === "chair" ? "🪑 主席" : label || "Assistant", time: rest.length ? rest[rest.length - 1] : "",
+    out.push({ role, who: role === "owner" ? "Owner" : role === "chair" ? "🪑 主席" : label || "Assistant", time: shown(rest.length ? rest[rest.length - 1] : ""),
       text: text.slice(h.index + h[0].length, i + 1 < heads.length ? heads[i + 1].index : text.length).trim() });
   });
   return out;
@@ -42,7 +46,7 @@ export default class Chat extends View {
     this.picked = new Set();  // spaces ticked in the new form / to-dos ticked for cards
     this.inviting = false; this.busy = null; this.error = null; this.yolo = true;
     this.scroll = ScrollHandle.new();
-    this.topic = InputState.new({ placeholder: "主題(也是檔名),例:k-chat 要不要支援 Codex" });
+    this.topic = InputState.new({ placeholder: "主題,例:k-chat 要不要支援 Codex(檔名取其中的英數)" });
     this.opening = InputState.new({ placeholder: "開場:要大家討論什麼?" });
     this.rounds = InputState.new({ placeholder: "12", value: "12" });
     this.have = null;         // which sources this machine's PATH has ({ claude, codex, gemini }), null: not asked yet
@@ -143,6 +147,16 @@ export default class Chat extends View {
     if (overlay && this.pin(path, title)) { closeOverlay(overlay); return; }
     this.open(path, cx);
   }
+  // A conversation porthole started there: k-chat takes it on (a state file next to it, the record
+  // untouched) as a plain conversation with the main Space's agent, then opens it.
+  adopt(x, cx) {
+    const m = this.main();
+    if (!m?.folder) return;
+    this.act("接手 porthole 的對話…", cx, async (cx) => {
+      const path = await this.cmd(["adopt", x.md, "--space", m.name, "--members", JSON.stringify([{ name: m.name, space: m.name, cwd: m.folder, agent: "claude" }])]);
+      this.go(path, x.title, cx);
+    });
+  }
 
   create(cx) {
     const m = this.main(), topic = this.topic.value().trim(), opening = this.opening.value().trim();
@@ -221,12 +235,13 @@ export default class Chat extends View {
           .when(!this.topics.length, (el) => el.child(div().p(10).text_size(12).text_color(t.dim)
             .child(m ? `${m.name} 的 doc/chat/ 還沒有討論。按 New discussion 開一場:邀幾個 Space 的 agent 進來、主席輪流點名。只跟這個 Space 的 agent 一對一對話:側欄 Space 列的「+」→ Chat。` : "先開一個 Space。")))
           .children(this.topics.map((x, i) => h_flex().id(`k-chat-topic-${i}`).min_h(40).px(10).gap(10).items_center().rounded(7).cursor_pointer().hover((st) => st.bg(t.hover))
-            .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => this.go(x.path, x.title, cx))
-            .child(div().size(8).flex_none().rounded_full().bg(x.status === "running" ? t.working : x.status === "waiting" ? t.blocked : t.done))
+            .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click((_e, cx) => (x.porthole ? this.adopt(x, cx) : this.go(x.path, x.title, cx)))
+            .when(Boolean(x.porthole), (el) => el.tooltip("在 porthole 開的對話:點開就接著跟這個 Space 的 agent 聊(同一個檔)"))
+            .child(div().size(8).flex_none().rounded_full().bg(x.porthole ? t.dim : x.status === "running" ? t.working : x.status === "waiting" ? t.blocked : t.done))
             .child(v_flex().flex_1().min_w(0)
               .child(div().truncate().child(x.title))
               .child(div().truncate().text_size(11).text_color(t.dim).child(x.members.map((n, j) => (x.sources?.[j] ? `${n}(${x.sources[j]})` : n)).join("、"))))
-            .child(div().flex_none().text_size(11).text_color(t.dim).child(`${x.status === "done" ? "已結束" : x.status === "waiting" ? "等 Owner" : "進行中"} · ${x.direct ? `一般對話 · ${x.round} 則` : `${x.round}/${x.max} 輪`}`)))),
+            .child(div().flex_none().text_size(11).text_color(t.dim).child(x.porthole ? `porthole · ${x.round} 則` : `${x.status === "done" ? "已結束" : x.status === "waiting" ? "等 Owner" : "進行中"} · ${x.direct ? `一般對話 · ${x.round} 則` : `${x.round}/${x.max} 輪`}`)))),
         note());
     }
 

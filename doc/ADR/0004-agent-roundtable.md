@@ -152,3 +152,15 @@ Herdr 原生的 terminal 不適合拿來做這件事:每個 agent 都是一個�
 - 按下去:`runner.mjs new --direct`(沒有開場,狀態先是 `waiting`)→ `start --no-layout` → 在那個 Space 開一個 k-chat 的 tab「💬 Chat 月-日 時:分」,直接打字。紀錄存在那個 Space 的 `doc/chat/chat-<日期時間>.md`。
 - 別台機器的 Space 不能用(紀錄要寫在本機的資料夾),那一列會灰掉。
 - 想用 Codex / Gemini 當對象:指令列 `new --direct` 的成員帶 `agent`。
+
+## 跟 porthole `#chat` 互通(2026-11-27,Owner 要求)
+
+- Owner:「大家都讀同個檔案,格式一樣就行了」;只要一對一的對話互通,討論群不用。
+- 做法:k-chat 的紀錄改成跟 porthole 寫的完全同一種格式,兩邊都直接讀寫同一個 `doc/chat/<名字>.md`,不做轉接。
+  - 檔首 `# <標題>`(以前是 `# Chat: <標題>`;porthole 拿 H1 當對話名稱)。
+  - 段落標頭的時間寫 ISO(`## 🧑 Human · 2026-11-27T02:03:20.870Z`,porthole 的收件匣靠它排序);mod 畫面照樣顯示 `HH:MM`。舊紀錄的 `HH:MM` 照讀。
+  - 檔名只留英數、`-`、`_`(porthole 只開得了這種名字);中文只放在標題。主題沒有英數 → `chat-<日期>-<時間>`;撞名 → `-2`、`-3`。
+- k-chat 這邊的列表也列出 porthole 開的對話(`doc/chat/*.md` 有對話、旁邊沒有狀態檔),標「porthole」。點開 = `runner.mjs adopt`:在旁邊建一個一般對話的狀態檔(對象是主 Space 的 agent),紀錄不動;第一輪把整個檔當上文。
+- 誰回話:在 porthole 講,porthole 自己用 `claude -p` 回;在 k-chat 講,k-chat 的 agent 回。兩邊每次都讀整個檔(k-chat 的 agent 讀「上次回答之後」新增的部分),所以另一邊講過的都看得到。porthole 寫的回答標頭沒有名字,mod 顯示成「Assistant」。
+- 實測(back,真的 `claude -p`):k-chat 開一對一問一題 → porthole API 在同一個檔問「k-chat 那邊我問了什麼」,答對 → 回 k-chat 問「porthole 那邊問了什麼」,答對。
+- 沒做:討論群(主席制)在 porthole 發言不會進主持程式(Owner 說不需要)。別台機器的 Space 一樣不能開 Chat(見上一節)。

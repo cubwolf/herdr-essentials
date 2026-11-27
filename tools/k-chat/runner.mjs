@@ -8,7 +8,10 @@
 //                  [--direct [--act]]   --direct: a plain conversation with the one member, no chair;
 //                                      --act: that agent may change files and run commands
 //                                      make the files, print the state path
-//   runner.mjs list --repo DIR         that repo's discussions, as JSON
+//   runner.mjs list --repo DIR         that repo's discussions, as JSON, newest first (with porthole's
+//                                      conversations there: { md, porthole: true })
+//   runner.mjs adopt <name.md> --members JSON [--space S]   take on a conversation porthole started, as a
+//                                      plain conversation with that one member; print the state path
 //   runner.mjs start <state.json> [--no-layout]   host it in a herdr-core terminal of its own (hc run --keep); the
 //                                      discussion gets a tab in the Herdr App unless --no-layout (the mod makes it)
 //   runner.mjs run <state.json>        host it here, in this terminal (picks up where it stopped)
@@ -316,9 +319,12 @@ function main() {
   switch (cmd) {
     case "new": {
       if (!o.repo || !o.topic) throw new Error("new 需要 --repo 與 --topic");
-      const repo = path.resolve(o.repo), f = L.files(repo, o.topic);
-      if (fs.existsSync(f.json)) throw new Error(`已經有這個主題:${f.json}`);
-      const s = L.newState({ repo, topic: o.topic, title: o.title, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
+      // The file name is the topic's letters and digits; a name already taken (by k-chat or porthole) gets -2, -3, …
+      const repo = path.resolve(o.repo), base = L.slug(o.topic);
+      let name = base;
+      for (let i = 2; fs.existsSync(L.files(repo, name).json) || fs.existsSync(L.files(repo, name).md); i += 1) name = `${base}-${i}`;
+      const f = L.files(repo, name);
+      const s = L.newState({ repo, topic: name, title: o.title || o.topic, space: o.space, list: JSON.parse(o.members || "[]"), chairAgent: o["chair-agent"], chairModel: o["chair-model"], maxRounds: o["max-rounds"], allowYolo: !o.noYolo, direct: o.direct, act: o.act });
       if (s.direct && !o.say) s.status = "waiting";   // nothing said yet: the agent has nothing to answer
       fs.mkdirSync(f.inbox, { recursive: true });
       fs.writeFileSync(f.md, L.header(s));
@@ -329,15 +335,39 @@ function main() {
     }
     case "list": {
       // This repo's discussions, as JSON (the mod can't list a folder itself).
+      // Conversations porthole's #chat started there (a record with turns, no state) come too, as
+      // { md, porthole: true }: opening one adopts it (`adopt`).
       const dir = path.join(path.resolve(o.repo || "."), "doc", "chat"), out = [];
-      let names = []; try { names = fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort(); } catch {}
-      for (const n of names) {
+      let names = []; try { names = fs.readdirSync(dir).sort(); } catch {}
+      for (const n of names.filter((x) => x.endsWith(".json"))) {
         try {
           const s = L.load(path.join(dir, n));
-          out.push({ path: path.join(dir, n), title: s.title, status: s.status, direct: Boolean(s.direct), round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name), sources: s.members.map((m) => L.sourceLabel(m)) });
+          out.push({ path: path.join(dir, n), title: s.title, status: s.status, direct: Boolean(s.direct), round: s.round, max: s.max_rounds, members: s.members.map((m) => m.name), sources: s.members.map((m) => L.sourceLabel(m)), at: fs.statSync(path.join(dir, n)).mtimeMs });
         } catch {}
       }
+      for (const n of names.filter((x) => x.endsWith(".md") && !names.includes(x.replace(/\.md$/, ".json")))) {
+        try {
+          const md = path.join(dir, n), text = fs.readFileSync(md, "utf8");
+          if (!L.hasTurns(text)) continue;
+          out.push({ md, porthole: true, title: L.titleOf(text, n.replace(/\.md$/, "")), status: "waiting", direct: true, round: L.messages(text).length, members: [], sources: [], at: fs.statSync(md).mtimeMs });
+        } catch {}
+      }
+      out.sort((a, b) => b.at - a.at);
       console.log(JSON.stringify(out));
+      break;
+    }
+    case "adopt": {
+      // A conversation porthole started (doc/chat/<name>.md, no state): k-chat takes it on as a plain
+      // conversation with that Space's agent, record untouched. Its first turn reads the whole record.
+      const md = path.resolve(o._[0] ?? ""), json = md.replace(/\.md$/, ".json");
+      if (!md.endsWith(".md") || !fs.existsSync(md)) throw new Error(`沒有這個對話檔:${md}`);
+      if (fs.existsSync(json)) { console.log(json); break; }
+      const repo = path.resolve(path.dirname(md), "..", ".."), text = fs.readFileSync(md, "utf8");
+      const s = L.newState({ repo, topic: path.basename(md, ".md"), title: L.titleOf(text, path.basename(md, ".md")), space: o.space, list: JSON.parse(o.members || "[]"), direct: true });
+      s.status = "waiting"; s.round = L.messages(text).filter((m) => m.role !== "owner").length;
+      fs.mkdirSync(L.filesOf(json).inbox, { recursive: true });
+      L.save(json, s);
+      console.log(json);
       break;
     }
     case "start": {

@@ -17,7 +17,7 @@ node ${CLAUDE_PLUGIN_ROOT}/runner.mjs <指令> …
 
 | 檔 | 內容 | 誰寫 |
 |---|---|---|
-| `<主題>.md` | 對話紀錄。`## 🧑 Human · 時:分`、`## 🤖 Assistant · 成員@space · 時:分`、`## 🤖 Assistant · 🪑 主席 · 時:分` | 只有主持程式 |
+| `<名字>.md` | 對話紀錄,格式同 porthole `#chat`:檔首 `# <標題>`,`## 🧑 Human · <ISO 時間>`、`## 🤖 Assistant · 成員@space · <ISO>`、`## 🤖 Assistant · 🪑 主席 · <ISO>`。`<名字>` = 主題裡的英數(沒有就 `chat-<日期>-<時間>`) | 主持程式;一對一的對話 porthole 也會寫 |
 | `<主題>.json` | 狀態:成員、各自的 session、輪數、`status`(running / waiting / done)、`now`(誰在發言)、`todos`、`runner`(主持程式的 pid 與時間) | 只有主持程式 |
 | `<主題>.inbox/` | 收件匣:一則訊息一個小 JSON 檔 | `say` / `invite` / `set` / `card` / `quit` |
 

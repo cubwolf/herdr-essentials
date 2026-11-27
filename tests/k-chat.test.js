@@ -96,6 +96,44 @@ test("一般對話:不經主席,Owner 說一句、agent 答一句;可動手由 O
   assert.throws(() => L.newState({ repo: "/r", topic: "t", direct: true, list: [{ space: "a", cwd: "/a" }, { space: "b", cwd: "/b" }] }), /剛好一個/);
 });
 
+test("porthole 開的對話:列得出來、接手後同一個檔接著聊,porthole 後來寫的也讀得到", async () => {
+  const t = setup([], ["--direct"], (d) => [{ space: "alpha", cwd: d.alpha }]);
+  try {
+    const chat = path.join(t.dirs.main, "doc", "chat");
+    const md = path.join(chat, "oauth-redirect.md");
+    fs.writeFileSync(md, "# OAuth redirect 的區網解法\n\n## 🧑 Human · 2026-11-27T01:00:00.000Z\n\nredirect URL 怎麼辦\n\n## 🤖 Assistant · 2026-11-27T01:01:00.000Z\n\n用 tailnet 的名字\n");
+    fs.writeFileSync(path.join(chat, "note.md"), "# 筆記\n\n沒有 turn 的檔不列\n");
+    const list = JSON.parse(t.cli("list", "--repo", t.dirs.main).stdout);
+    const p = list.find((x) => x.porthole);
+    assert.equal(list.filter((x) => x.porthole).length, 1, "只列有對話的檔");
+    assert.deepEqual([p.md, p.title, p.round], [md, "OAuth redirect 的區網解法", 2]);
+
+    const adopted = t.cli("adopt", md, "--space", "alpha", "--members", JSON.stringify([{ space: "alpha", cwd: t.dirs.alpha }]));
+    assert.equal(adopted.status, 0, adopted.stderr);
+    const state = adopted.stdout.trim();
+    assert.equal(state, md.replace(/\.md$/, ".json"));
+    assert.equal(t.cli("adopt", md, "--members", "[]").stdout.trim(), state, "再接手一次:同一個");
+    assert.ok(!JSON.parse(t.cli("list", "--repo", t.dirs.main).stdout).some((x) => x.porthole), "接手後是 k-chat 的對話");
+    const s = JSON.parse(fs.readFileSync(state, "utf8"));
+    assert.deepEqual([s.direct, s.status, s.title], [true, "waiting", "OAuth redirect 的區網解法"]);
+    assert.ok(fs.readFileSync(md, "utf8").startsWith("# OAuth redirect 的區網解法\n\n## 🧑 Human"), "紀錄沒被動到");
+
+    const proc = spawn("node", [RUNNER, "run", state], { env: t.env, stdio: "ignore" });
+    const answered = async (n) => { for (let i = 0; i < 500 && JSON.parse(fs.readFileSync(state, "utf8")).round < n; i += 1) await new Promise((r) => setTimeout(r, 30)); };
+    try {
+      t.cli("say", state, "那 laptop 呢");
+      await answered(2);
+      assert.match(t.calls()[0].input, /redirect URL 怎麼辦[\s\S]*用 tailnet 的名字[\s\S]*那 laptop 呢/, "第一輪讀整個檔(含 porthole 的)");
+      // porthole 又在同一個檔聊了一輪,回到 k-chat 再講話:那段也帶得到
+      fs.appendFileSync(md, "\n## 🧑 Human · 2026-11-27T02:00:00.000Z\n\n在 porthole 問的\n\n## 🤖 Assistant · 2026-11-27T02:00:30.000Z\n\nporthole 的回答\n");
+      t.cli("say", state, "回到 k-chat");
+      await answered(3);
+      assert.match(t.calls()[1].input, /在 porthole 問的[\s\S]*porthole 的回答[\s\S]*回到 k-chat/);
+      assert.equal(L.messages(fs.readFileSync(md, "utf8")).length, 8);
+    } finally { proc.kill("SIGTERM"); await new Promise((r) => proc.once("exit", r)); }
+  } finally { await t.stop(); }
+});
+
 test("主席自己也說話:先講再點名;自己答得了就直接回 Owner", async () => {
   const t = setup([pick("alpha", { say: "先整理一下:兩個方案差在成本。\n\n## 我的看法\n\n偏向甲。" }), pick("owner", { say: "這題我直接答:用甲。", ask: "同意嗎?" })]);
   try {
@@ -155,7 +193,7 @@ test("一場討論:主席輪流點名、YOLO 只開那一輪、別台機器走 h
     const task = JSON.parse(fs.readFileSync(path.join(t.dirs.fake, "task.jsonl"), "utf8").trim());
     assert.deepEqual(task.args.slice(0, 5), ["create", "--repo", "beta", "--title", "加測試"]);
     assert.equal(task.who, "main");
-    assert.match(task.body, /補單元測試[\s\S]*方案-討論\.md/);
+    assert.match(task.body, /補單元測試[\s\S]*「方案 討論」[\s\S]*doc\/chat\/chat-\d{8}-\d{6}\.md/);
     assert.equal(t.s().todos[0].card, null);
     assert.ok(t.md().includes("🗂 Owner 把待辦開成 Tide 卡:\n- #999 加測試(beta)"));
 
@@ -211,7 +249,7 @@ test("關掉主持程式再開:接著跑;同時開兩個會被擋", async () => 
     t.start();
     await t.until("跑完", () => t.s().status === "done");
     assert.equal(t.s().members.find((m) => m.name === "alpha").session, "sess-alpha");
-    assert.equal(t.md().split("# Chat:").length, 2, "標頭只寫一次");
+    assert.equal(t.md().split(/^# /m).length, 2, "標頭只寫一次");
     assert.ok(L.messages(t.md()).filter((m) => m.role === "member").length >= 3);
   } finally { await t.stop(); }
 });
@@ -332,6 +370,8 @@ test("lib:Owner 的話、主席的回答、紀錄格式", () => {
   assert.equal(L.parseSay("/stopwatch 是什麼", names).stop, false);
   assert.deepEqual(L.parseSay("@beta、@alpha 還有 @nobody,@beta 再一次", names).mentions, ["beta", "alpha"]);
   assert.equal(L.slug(" a/b: c "), "a-b-c");
+  assert.equal(L.slug("k-chat 要不要支援 Codex"), "k-chat-Codex", "檔名只留英數(porthole 開得了)");
+  assert.equal(L.slug("方案 討論", new Date(2026, 10, 27, 9, 5, 7)), "chat-20261127-090507");
   assert.throws(() => L.slug("  "));
   assert.deepEqual(L.members([{ space: "x", cwd: "/a" }, { space: "x", cwd: "/b", machine: "laptop" }, { space: "x", cwd: "/c" }]).map((m) => m.name), ["x", "x-laptop", "x-2"]);
   const s = L.newState({ repo: "/r/main", topic: "t", list: [{ space: "alpha", cwd: "/a" }, { space: "beta", cwd: "/b" }] });
@@ -343,6 +383,13 @@ test("lib:Owner 的話、主席的回答、紀錄格式", () => {
   // porthole 的 #chat 用同一個規則切訊息
   assert.equal([...md.matchAll(/^## (🧑 Human|🤖 Assistant)[^\n]*$/gm)].length, 3);
   assert.deepEqual(L.messages(md).map((m) => [m.role, m.who]), [["owner", "Owner"], ["chair", "主席"], ["member", "alpha@alpha"]]);
+  // 時間跟 porthole 一樣寫 ISO(它的收件匣據此排序),畫面上是 HH:MM;舊紀錄的 HH:MM 照原樣
+  assert.match(md, /^## 🧑 Human · \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/m);
+  assert.match(L.messages(md)[0].time, /^\d\d:\d\d$/);
+  assert.equal(L.messages("## 🧑 Human · 09:30\n\nhi\n")[0].time, "09:30");
+  assert.ok(md.startsWith("# t\n"), "H1 就是標題(porthole 拿來當對話名稱)");
+  assert.equal(L.titleOf("# 標題\n\n## 🤖 Assistant · x\n\n# 內文的標題\n", "f"), "標題");
+  assert.equal(L.titleOf("## 🧑 Human · x\n\n# 內文的標題\n", "f"), "f");
   assert.ok(L.memberArgv({ agent: "claude", fork: "abc" }, false).args.join(" ").includes("--resume abc --fork-session"));
   assert.deepEqual(L.memberArgv({ agent: "codex", session: "th1", model: "gpt-x" }, false).args, ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", "gpt-x", "resume", "th1", "-"]);
   assert.equal(L.source("agy"), "gemini");
