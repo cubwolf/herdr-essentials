@@ -318,6 +318,16 @@ export default class Spaces extends View {
     cx.notify();
   }
 
+  // k-spaces: "Collapse All" (IntelliJ's): every space's tab list folded in. Machines stay unfolded:
+  // their spaces are the list.
+  collapseAll(cx) {
+    if (!this.tabsOpen.size) return;
+    this.tabsOpen.clear();
+    localStorage.setItem("k.tabs.open", "[]");
+    this.cursor = null;
+    cx.notify();
+  }
+
   // k-spaces: its own menu (menu.js): the shipped items plus Copy path and Hide.
   menu(w, g) {
     // A popup is as tall as its items; height is only the most.
@@ -701,6 +711,9 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child(div().id("spaces-locate").size(26).flex_none().flex().items_center().justify_center().rounded(6)
           .hover(s => s.bg(t.hover).text_color(t.foreground)).tooltip("Select the shown session: unfold its space and scroll to it")
           .on_click((_e, cx) => this.locate(cx)).child(svg("mods/k-spaces/locate.svg").size(14))))
+        .when(!collapsed, el => el.child(div().id("spaces-collapse").size(26).flex_none().flex().items_center().justify_center().rounded(6)
+          .hover(s => s.bg(t.hover).text_color(t.foreground)).tooltip("Collapse all: fold every space's tabs in")
+          .on_click((_e, cx) => this.collapseAll(cx)).child(svg("mods/k-spaces/collapse.svg").size(14))))
         // k-spaces: how many are hidden in this window; click to show them (dimmed) or hide them again.
         .when(!collapsed && hiddenCount > 0, el => el.child(h_flex().id("spaces-hidden").h(22).px(6).gap(5).rounded(5).items_center().flex_none()
           .text_size(11).text_color(showHidden ? t.foreground : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
