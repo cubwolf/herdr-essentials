@@ -234,7 +234,7 @@ export default class Tabs extends View {
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
         // Tabs of several spaces on the bar: say whose each one is.
-        .when(several, el => el.child(div().max_w(90).truncate().text_size(11).text_color(t.dim).child(entry.space.name)))
+        .when(several, el => el.child(div().max_w(90).truncate().text_size(11).child(entry.space.name)))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
         // × on the shown tab and on the one under the pointer; the others keep its room, so tabs don't shift.

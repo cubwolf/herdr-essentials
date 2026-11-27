@@ -306,6 +306,18 @@ export default class Spaces extends View {
     });
   }
 
+  // k-spaces: "Select Opened" (IntelliJ's Select Opened File): the shown session's space is unfolded
+  // (its machine too, and shown if it was hidden), its tabs folded out, and the list scrolled to it.
+  locate(cx) {
+    const w = spaces().find(s => s.active);
+    if (!w) return;
+    if (this.folded.delete(w.machine ?? null)) localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
+    if (!this.tabsOpen.has(w.id)) { this.tabsOpen.add(w.id); localStorage.setItem("k.tabs.open", JSON.stringify([...this.tabsOpen])); }
+    if (this.isHidden(w) && shared("k-spaces.showHidden") !== true) setShared("k-spaces.showHidden", true);
+    this.revealed = null; // the next render scrolls to it again
+    cx.notify();
+  }
+
   // k-spaces: its own menu (menu.js): the shipped items plus Copy path and Hide.
   menu(w, g) {
     // A popup is as tall as its items; height is only the most.
@@ -686,6 +698,9 @@ export default class Spaces extends View {
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child(div().flex_1().child("Spaces")))
+        .when(!collapsed, el => el.child(div().id("spaces-locate").size(26).flex_none().flex().items_center().justify_center().rounded(6)
+          .hover(s => s.bg(t.hover).text_color(t.foreground)).tooltip("Select the shown session: unfold its space and scroll to it")
+          .on_click((_e, cx) => this.locate(cx)).child(svg("mods/k-spaces/locate.svg").size(14))))
         // k-spaces: how many are hidden in this window; click to show them (dimmed) or hide them again.
         .when(!collapsed && hiddenCount > 0, el => el.child(h_flex().id("spaces-hidden").h(22).px(6).gap(5).rounded(5).items_center().flex_none()
           .text_size(11).text_color(showHidden ? t.foreground : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))

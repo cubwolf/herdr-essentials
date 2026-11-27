@@ -2,7 +2,7 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, notify, exec, machines, checking } from "herdr";
 import { modelOf, effortLevel, modelTip } from "./model.js";
 
@@ -135,6 +135,8 @@ export default class Agents extends View {
     if (props()?.sortMenu || props()?.agentMenu) return;
     if (!checking()) cx.spawn(() => selfName());
     this.folded = new Set();
+    this.scroll = ScrollHandle.new(); // the list's position: "Select Opened" brings the shown agent's row into view
+    this.locating = false;
     // Each agent's last state and when it changed (ms), kept across restarts.
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
@@ -517,9 +519,32 @@ export default class Agents extends View {
           .when(!byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
+    // k-agents: "Select Opened" (the header's button): the shown agent's group and parent are unfolded, then
+    // (the rows drawn) the list scrolls to its row. `shown` may be a sub-agent: its parent's row is the one to open.
+    const holds = (a) => a.address === shown || this.tree(all, a.address).some((s) => s.t.address === shown);
+    if (this.locating) {
+      const g = groups.find((x) => x.members.some(holds)), a = g?.members.find(holds);
+      if (g) this.folded.delete(g.id);
+      if (a) this.folded.delete(a.address);
+    }
     const rows = collapsed
       ? list.flatMap(withKids)
       : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+    if (this.locating) {
+      this.locating = false;
+      let at = -1, n = 0;
+      const walk = (a) => {
+        const subs = collapsed || this.folded.has(a.address) ? [] : this.tree(all, a.address);
+        if (a.address === shown) at = n;
+        const sub = subs.findIndex((s) => s.t.address === shown);
+        if (sub >= 0) at = n + 1 + sub;
+        n += 1 + subs.length;
+      };
+      if (collapsed) list.forEach(walk);
+      else for (const g of groups) { n += 1; if (!this.folded.has(g.id)) g.members.forEach(walk); }
+      if (at >= 0) this.scroll.scroll_to_item(at);
+      else notify({ title: "Agents", body: shown ? "The shown agent isn't in this list (its machine may be hidden)." : "The shown tab has no agent.", timeout: 4000 });
+    }
 
     return v_flex()
       .size_full()
@@ -538,7 +563,11 @@ export default class Agents extends View {
             .flex_none()
             .items_center()
             .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
+            .child(div().flex_1().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
+            .child(div().id("ag-locate").mr(10).text_color(t.dim).hover((s) => s.text_color(t.foreground))
+              .tooltip("Select the shown agent: unfold its group and scroll to it")
+              .on_click((_e, cx) => { this.locating = true; cx.notify(); })
+              .child(svg("mods/k-agents/locate.svg").size(14)))
             .child(
               div()
                 .id("ag-sort")
@@ -554,7 +583,7 @@ export default class Agents extends View {
       .when(list.length === 0 && !collapsed, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").track_scroll(this.scroll).children(rows))
       .when(collapsed, (el) =>
         el.child(
           h_flex()
